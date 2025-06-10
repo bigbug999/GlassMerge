@@ -1215,21 +1215,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let color: SKColor
     }
     
+    static func calculateRadius(forTier tier: Int) -> CGFloat {
+        let baseSize: CGFloat = 18
+        return baseSize + (tier > 1 ? CGFloat((tier - 1) * 12) : 0)
+    }
+    
     // From cyan to a dark gray/black
-    static let tierData: [TierInfo] = [
-        TierInfo(radius: 16,  color: SKColor(white: 0.60, alpha: 1.0)),
-        TierInfo(radius: 25,  color: SKColor(white: 0.20, alpha: 1.0)),
-        TierInfo(radius: 34,  color: SKColor(white: 0.66, alpha: 1.0)),
-        TierInfo(radius: 42,  color: SKColor(white: 0.26, alpha: 1.0)),
-        TierInfo(radius: 52,  color: SKColor(white: 0.72, alpha: 1.0)),
-        TierInfo(radius: 60,  color: SKColor(white: 0.32, alpha: 1.0)),
-        TierInfo(radius: 68,  color: SKColor(white: 0.78, alpha: 1.0)),
-        TierInfo(radius: 76,  color: SKColor(white: 0.38, alpha: 1.0)),
-        TierInfo(radius: 87,  color: SKColor(white: 0.84, alpha: 1.0)),
-        TierInfo(radius: 94,  color: SKColor(white: 0.44, alpha: 1.0)),
-        TierInfo(radius: 98,  color: SKColor(white: 0.90, alpha: 1.0)),
-        TierInfo(radius: 102, color: SKColor(white: 0.50, alpha: 1.0))
-    ]
+    static let tierData: [TierInfo] = (1...12).map { tier in
+        let colors: [SKColor] = [
+            SKColor(white: 0.60, alpha: 1.0), SKColor(white: 0.20, alpha: 1.0),
+            SKColor(white: 0.66, alpha: 1.0), SKColor(white: 0.26, alpha: 1.0),
+            SKColor(white: 0.72, alpha: 1.0), SKColor(white: 0.32, alpha: 1.0),
+            SKColor(white: 0.78, alpha: 1.0), SKColor(white: 0.38, alpha: 1.0),
+            SKColor(white: 0.84, alpha: 1.0), SKColor(white: 0.44, alpha: 1.0),
+            SKColor(white: 0.90, alpha: 1.0), SKColor(white: 0.50, alpha: 1.0)
+        ]
+        return TierInfo(radius: calculateRadius(forTier: tier), color: colors[tier - 1])
+    }
     let maxTier = tierData.count
     
     struct PhysicsCategory {
@@ -1275,14 +1277,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         sphere.userData = ["tier": tier]
         
-        sphere.physicsBody = SKPhysicsBody(circleOfRadius: tierInfo.radius)
-        sphere.physicsBody?.categoryBitMask = PhysicsCategory.sphere
-        sphere.physicsBody?.contactTestBitMask = PhysicsCategory.sphere
-        sphere.physicsBody?.collisionBitMask = PhysicsCategory.sphere | PhysicsCategory.wall
-        sphere.physicsBody?.restitution = 0.3
-        sphere.physicsBody?.friction = 0.2
-        sphere.physicsBody?.allowsRotation = true
-        sphere.physicsBody?.linearDamping = 0.1
+        let body = SKPhysicsBody(circleOfRadius: tierInfo.radius)
+        body.categoryBitMask = PhysicsCategory.sphere
+        body.contactTestBitMask = PhysicsCategory.sphere
+        body.collisionBitMask = PhysicsCategory.sphere | PhysicsCategory.wall
+        body.restitution = 0.1
+        body.friction = 0.05
+        body.allowsRotation = true
+        body.linearDamping = 0.1
+        body.angularDamping = 0.1
+        
+        let maxTierMass: CGFloat = 12
+        let baseMass: CGFloat = 10.0
+        let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
+        body.mass = baseMass * massMultiplier
+        
+        sphere.physicsBody = body
         
         addChild(sphere)
         return sphere
