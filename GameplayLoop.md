@@ -289,7 +289,7 @@
 
 ### Phase 1: Core Game Mechanics ✓ (COMPLETED)
 1. **Basic Physics Setup** ✓
-   - Create base flask size (375x500)
+   - Create base flask size 
    - Implement basic sphere physics
    - Set up collision detection
    - Configure base ball size (50 points)

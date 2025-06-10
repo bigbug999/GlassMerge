@@ -345,6 +345,7 @@ class GameViewModel: ObservableObject {
     let xpNeededPerLevel: Int = 10
     let powerUpManager: PowerUpManager
     @Published private var sphereStates: [SphereState] = []
+    var sphereStateProvider: (() -> [SphereState])?
     
     // Define a type to represent either a new power-up or an upgrade
     enum PowerUpChoice: Identifiable {
@@ -376,9 +377,7 @@ class GameViewModel: ObservableObject {
     init(powerUpManager: PowerUpManager, restore state: GameState? = nil) {
         self.powerUpManager = powerUpManager
         if let state = state {
-            DispatchQueue.main.async {
-                self.applyGameState(state)
-            }
+            self.applyGameState(state)
         }
     }
     
@@ -590,7 +589,10 @@ class GameViewModel: ObservableObject {
     }
     
     // MARK: - Saving
-    func saveGameState() {
+    func saveGameState(fromScene: Bool = true) {
+        if fromScene, let provider = sphereStateProvider {
+            self.sphereStates = provider()
+        }
         let gameState = makeGameState()
         SaveManager.shared.save(gameState)
     }
@@ -640,7 +642,7 @@ class GameViewModel: ObservableObject {
         print("GameViewModel: Saving \(states.count) sphere states")
         #endif
         sphereStates = states
-        saveGameState()
+        saveGameState(fromScene: false)
     }
 }
 
@@ -792,10 +794,9 @@ struct GameView: View {
                     .edgesIgnoringSafeArea(.all)
                     .transition(.opacity)
                 
-                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen) {
-                    viewModel.isGamePaused = false
+                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen, onMainMenu: {
                     viewModel.saveGameState()
-                }
+                })
             }
         }
         .sheet(isPresented: $viewModel.isLevelUpViewPresented) {
@@ -803,6 +804,9 @@ struct GameView: View {
         }
         .onChange(of: isPaused) { newValue in
             viewModel.isGamePaused = newValue
+            if newValue {
+                viewModel.saveGameState()
+            }
         }
         .onChange(of: viewModel.isLevelUpViewPresented) { newValue in
             // Physics will pause automatically due to updateUIView
@@ -1180,6 +1184,10 @@ struct SpriteKitContainer: UIViewRepresentable {
         scene.viewModel = viewModel
         context.coordinator.scene = scene
         
+        context.coordinator.viewModel.sphereStateProvider = { [weak scene] in
+            return scene?.getCurrentSphereStates() ?? []
+        }
+        
         #if DEBUG
         print("SpriteKitContainer: Creating new scene")
         if let states = viewModel.getSphereStates() {
@@ -1198,25 +1206,6 @@ struct SpriteKitContainer: UIViewRepresentable {
             
             // Update pause state
             scene.isPaused = viewModel.isGamePaused || viewModel.isLevelUpViewPresented
-            
-            // Force restore if we have states
-            if let states = viewModel.getSphereStates() {
-                #if DEBUG
-                print("SpriteKitContainer: Restoring \(states.count) spheres in update")
-                #endif
-                
-                // Clear existing spheres
-                scene.children.forEach { node in
-                    if node is SKShapeNode {
-                        node.removeFromParent()
-                    }
-                }
-                
-                // Recreate spheres from saved state
-                for state in states {
-                    scene.createSphere(at: state.position)
-                }
-            }
         }
     }
 }
@@ -1279,7 +1268,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let location = touch.location(in: self)
         
         _ = createSphere(at: CGPoint(x: location.x, y: size.height - 50))
-        viewModel?.saveSphereStates(getCurrentSphereStates())
         viewModel?.earnScore(points: 1)
     }
 }

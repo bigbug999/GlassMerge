@@ -21,6 +21,7 @@ _Last updated: 2025-06-11_
 * `RunState`
   * `score`, `level`, `xp` – current run stats (expandable)
   * `equipped : [PowerUpSave?]` – fixed-length (6) array representing each slot; `nil` = empty
+  * `spheres: [SphereState]` - snapshot of all spheres in the play area.
 
 * `PowerUpProgress`
   * `id : String` – **power-up name** (stable key)
@@ -49,7 +50,8 @@ _Last updated: 2025-06-11_
 | Event | Method | Notes |
 |-------|--------|-------|
 | Level-up choice selected | `GameViewModel.saveGameState()` | Keeps run up-to-date after each reward. |
-| Pause → Main Menu | `PauseMenuView.onMainMenu` | Persists before tearing down the game view. |
+| Pause button tapped | `GameView.onChange(of: isPaused)` | Persists sphere positions and run state when pausing. |
+| Pause → Main Menu | `PauseMenuView.onMainMenu` | Final save before tearing down the game view. |
 | App lifecycle (future) | SceneDelegate / `sceneWillResignActive` | Add call to `SaveManager.save` to guard against force-quit. |
 
 The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaranteeing an actual run is present.
@@ -85,14 +87,23 @@ The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaran
 ## 5. Loading Workflow in UI
 1. Main menu checks for a valid `run` → enables _Continue_.
 2. Pressing _Continue_ reads `GameState` and injects it into `GameView`.
-3. `GameViewModel` asynchronously calls `applyGameState` to populate:
+3. `GameViewModel`'s initializer **synchronously** calls `applyGameState` to populate:
    * currency, unlocked status, levels
    * equipped slots (multi-slot lengths respected)
-4. UI updates through `@Published` bindings.
+   * **Crucially, sphere positions from the previous session.**
+4. The `GameScene` is created with this fully-loaded initial state, preventing race conditions.
+5. UI updates through `@Published` bindings.
 
 ---
 
-## 6. Future Ideas
+## 6. Communication During Gameplay (Saving)
+* The `GameViewModel` holds a `sphereStateProvider` closure.
+* `SpriteKitContainer` sets this provider, giving it a reference to the `GameScene`'s `getCurrentSphereStates()` method.
+* When `saveGameState()` is called (e.g., on pause), it invokes the provider to get live sphere positions from the `SKScene` before serializing. This avoids coupling the scene directly to the view model while ensuring the most up-to-date state is saved.
+
+---
+
+## 7. Future Ideas
 * **Cloud sync** – serialize JSON, base-64 & push to iCloud key-value store.
 * **Compression** – wrap data with `Compression` framework (e.g., LZFSE) before writing.
 * **Checksum** – append SHA-256 hash to detect corruption.
