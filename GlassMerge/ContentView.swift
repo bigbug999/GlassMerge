@@ -302,6 +302,10 @@ class GameViewModel: ObservableObject {
     @Published var isLevelUpViewPresented = false
     @Published var powerUpChoices: [PowerUpChoice] = []
     @Published var hasReroll: Bool = true
+    @Published var score: Int = 0
+    @Published var xp: Int = 0
+    @Published var level: Int = 1
+    let xpNeededPerLevel: Int = 10
     let powerUpManager: PowerUpManager
     
     // Define a type to represent either a new power-up or an upgrade
@@ -364,6 +368,9 @@ class GameViewModel: ObservableObject {
                     equippedPowerUps[slot] = instance
                 }
             }
+            self.score = run.score
+            self.xp = run.xp
+            self.level = run.level
         }
     }
     
@@ -375,6 +382,9 @@ class GameViewModel: ObservableObject {
         // Don't show level up screen if no slots available and no upgrades possible
         guard hasEmptySlot || hasUpgradeablePowerUps else { return }
         
+        #if DEBUG
+        print("Presenting level up choices at level \(level)")
+        #endif
         var choices: [PowerUpChoice] = []
         
         // Get available new power-ups only if there are empty slots
@@ -544,9 +554,25 @@ class GameViewModel: ObservableObject {
             guard let item = item else { return nil }
             return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index)
         }
-        let run = RunState(score: 0, level: 0, xp: 0, equipped: equipped)
+        let run = RunState(score: score, level: level, xp: xp, equipped: equipped)
         
         return GameState(progression: progression, run: run, meta: MetaState())
+    }
+    
+    func earnScore(points: Int = 1) {
+        score += points
+        xp += points
+        #if DEBUG
+        print("EarnScore: score=\(score) xp=\(xp)/\(xpNeededPerLevel) level=\(level)")
+        #endif
+        if xp >= xpNeededPerLevel {
+            xp -= xpNeededPerLevel
+            level += 1
+            #if DEBUG
+            print("LEVEL UP! new level=\(level) xp reset to \(xp)")
+            #endif
+            presentLevelUpChoices()
+        }
     }
 }
 
@@ -657,17 +683,23 @@ struct GameView: View {
             
             VStack {
                 HStack {
-                    Text("Score: 0")
+                    Text("Score: \(viewModel.score)")
                         .font(.headline)
-                    
                     Spacer()
-                    
-                    Button(action: {
-                        isPaused = true
-                    }) {
-                        Image(systemName: "pause.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.blue)
+                    ProgressView(value: Double(viewModel.xp), total: Double(viewModel.xpNeededPerLevel))
+                        .progressViewStyle(.linear)
+                        .frame(width: 150)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text("Lv\(viewModel.level)")
+                            .font(.headline)
+                        Button(action: {
+                            isPaused = true
+                        }) {
+                            Image(systemName: "pause.circle.fill")
+                                .font(.title)
+                                .foregroundColor(.blue)
+                        }
                     }
                 }
                 .padding()
@@ -677,10 +709,10 @@ struct GameView: View {
                 // Game area with test level up button
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.gray.opacity(0.3), lineWidth: 2)
-                    .frame(width: 375, height: 500)
+                    .frame(width: 375, height: 650)
                     .overlay(
-                        Button("Level Up!") {
-                            viewModel.presentLevelUpChoices()
+                        Button("Score") {
+                            viewModel.earnScore()
                         }
                         .buttonStyle(.borderedProminent)
                     )
@@ -821,6 +853,7 @@ struct PauseMenuView: View {
                 .font(.title)
                 .fontWeight(.bold)
                 .padding(.bottom, 20)
+                .foregroundColor(.white)
             
             Button(action: {
                 isPaused = false
@@ -848,9 +881,10 @@ struct PauseMenuView: View {
         .padding(40)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color.white)
+                .fill(Color(white: 0.15))
                 .shadow(radius: 10)
         )
+        .foregroundColor(.white)
     }
 }
 
@@ -975,11 +1009,12 @@ struct LevelUpView: View {
                     .font(.headline)
                     .foregroundColor(.white)
                 
-                HStack(spacing: 12) {
+                VStack(spacing: 12) {
                     ForEach(viewModel.powerUpChoices) { choice in
                         PowerUpChoiceCard(choice: choice) {
                             viewModel.selectPowerUp(choice)
                         }
+                        .frame(maxWidth: 220) // narrower card width for vertical layout
                     }
                 }
                 
