@@ -6,6 +6,85 @@
 //
 
 import SwiftUI
+import Foundation
+
+// MARK: - SAVE SYSTEM (embedded)
+struct GameState: Codable {
+    var schemaVersion: Int = 1
+    var progression: Progression
+    var run: RunState?
+    var meta: MetaState
+}
+
+struct MetaState: Codable {
+    var firstLaunchDate: Date = Date()
+    var totalPlayTime: TimeInterval = 0
+}
+
+struct Progression: Codable {
+    var currency: Int
+    var powerUps: [PowerUpProgress]
+}
+
+struct PowerUpProgress: Codable {
+    let id: String // power-up name key
+    var isUnlocked: Bool
+    var level: Int
+}
+
+struct RunState: Codable {
+    var score: Int
+    var level: Int
+    var xp: Int
+    var equipped: [PowerUpSave?]
+}
+
+struct PowerUpSave: Codable {
+    let id: String // power-up name key
+    var level: Int
+    var slotIndex: Int
+}
+
+final class SaveManager {
+    static let shared = SaveManager()
+    private init() {}
+
+    private let fileName = "GameState.json"
+
+    private var saveURL: URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return dir.appendingPathComponent(fileName)
+    }
+
+    func save(_ state: GameState) {
+        DispatchQueue.global(qos: .background).async { [url = saveURL] in
+            do {
+                let data = try JSONEncoder().encode(state)
+                try data.write(to: url, options: .atomic)
+                #if DEBUG
+                print("[SaveManager] Saved game to \(url.path)")
+                #endif
+            } catch {
+                assertionFailure("Failed to save game state: \(error)")
+            }
+        }
+    }
+
+    func load() -> GameState? {
+        guard FileManager.default.fileExists(atPath: saveURL.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: saveURL)
+            let state = try JSONDecoder().decode(GameState.self, from: data)
+            #if DEBUG
+            print("[SaveManager] Loaded game from \(saveURL.path)")
+            #endif
+            return state
+        } catch {
+            print("Failed to load game state: \(error)")
+            return nil
+        }
+    }
+}
 
 // Power-up Model
 enum PowerUpCategory: String, CaseIterable {
@@ -136,7 +215,7 @@ class PowerUpManager: ObservableObject {
             description: "Creates attraction force to same-tier balls",
             category: .magnetism,
             type: .singleUse,
-            icon: "magnet.fill",
+            icon: "bolt.circle.fill",
             isUnlocked: false,
             level: 1,
             cost: 1000
@@ -222,6 +301,7 @@ class GameViewModel: ObservableObject {
     @Published var equippedPowerUps: [PowerUp?] = Array(repeating: nil, count: 6)
     @Published var isLevelUpViewPresented = false
     @Published var powerUpChoices: [PowerUpChoice] = []
+    @Published var hasReroll: Bool = true
     let powerUpManager: PowerUpManager
     
     // Define a type to represent either a new power-up or an upgrade
@@ -251,28 +331,83 @@ class GameViewModel: ObservableObject {
         }
     }
     
-    init(powerUpManager: PowerUpManager) {
+    init(powerUpManager: PowerUpManager, restore state: GameState? = nil) {
         self.powerUpManager = powerUpManager
+        if let state = state {
+            DispatchQueue.main.async {
+                self.applyGameState(state)
+            }
+        }
+    }
+    
+    private func applyGameState(_ state: GameState) {
+        // Restore progression
+        powerUpManager.currency = state.progression.currency
+
+        // Restore power-up progression
+        for progress in state.progression.powerUps {
+            if let index = powerUpManager.powerUps.firstIndex(where: { $0.name == progress.id }) {
+                powerUpManager.powerUps[index].isUnlocked = progress.isUnlocked
+                powerUpManager.powerUps[index].level = progress.level
+            }
+        }
+
+        // Restore equipped power-ups
+        equippedPowerUps = Array(repeating: nil, count: 6)
+        if let run = state.run {
+            for (slot, save) in run.equipped.enumerated() {
+                guard let save = save else { continue }
+                if let base = powerUpManager.powerUps.first(where: { $0.name == save.id }) {
+                    var instance = base
+                    instance.level = save.level
+                    instance.slotIndex = save.slotIndex
+                    equippedPowerUps[slot] = instance
+                }
+            }
+        }
     }
     
     func presentLevelUpChoices() {
+        // Check if there are any empty slots or upgradeable power-ups
+        let hasEmptySlot = equippedPowerUps.contains(where: { $0 == nil })
+        let hasUpgradeablePowerUps = !getUpgradeablePowerUps().isEmpty
+        
+        // Don't show level up screen if no slots available and no upgrades possible
+        guard hasEmptySlot || hasUpgradeablePowerUps else { return }
+        
         var choices: [PowerUpChoice] = []
         
-        // Get available new power-ups
-        let newPowerUps = powerUpManager.powerUps
-            .filter { !$0.hasBeenOffered }
-            .map { PowerUpChoice.new($0) }
+        // Get available new power-ups only if there are empty slots
+        if hasEmptySlot {
+            let newPowerUps = powerUpManager.powerUps
+                .filter { !$0.hasBeenOffered }
+                .map { PowerUpChoice.new($0) }
+            choices += newPowerUps
+        }
         
         // Get upgradeable power-ups
         let upgradeablePowerUps = getUpgradeablePowerUps()
             .map { PowerUpChoice.upgrade($0) }
+        choices += upgradeablePowerUps
         
-        // Combine and shuffle all options
-        choices = (newPowerUps + upgradeablePowerUps).shuffled()
+        // If no choices available, don't show the screen
+        guard !choices.isEmpty else { return }
         
-        // Take first 3 or all if less than 3
+        // Shuffle and take first 3 or all if less than 3
+        choices.shuffle()
         powerUpChoices = Array(choices.prefix(3))
         isLevelUpViewPresented = true
+        saveGameState() // Save upon reaching a new level
+    }
+    
+    func rerollChoices() {
+        guard hasReroll else { return }
+        hasReroll = false
+        presentLevelUpChoices()
+    }
+    
+    func skipLevelUp() {
+        isLevelUpViewPresented = false
     }
     
     private func getUpgradeablePowerUps() -> [PowerUp] {
@@ -314,6 +449,7 @@ class GameViewModel: ObservableObject {
             upgradePowerUp(powerUp)
         }
         isLevelUpViewPresented = false
+        saveGameState() // Save after applying choice
     }
     
     private func addNewPowerUp(_ powerUp: PowerUp) {
@@ -389,10 +525,34 @@ class GameViewModel: ObservableObject {
             }
         }
     }
+    
+    // MARK: - Saving
+    func saveGameState() {
+        let gameState = makeGameState()
+        SaveManager.shared.save(gameState)
+    }
+    
+    private func makeGameState() -> GameState {
+        // Build Progression
+        let progressEntries = powerUpManager.powerUps.map { powerUp in
+            PowerUpProgress(id: powerUp.name, isUnlocked: powerUp.isUnlocked, level: powerUp.level)
+        }
+        let progression = Progression(currency: powerUpManager.currency, powerUps: progressEntries)
+        
+        // Build RunState with equipped power-ups
+        let equipped: [PowerUpSave?] = equippedPowerUps.enumerated().map { index, item in
+            guard let item = item else { return nil }
+            return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index)
+        }
+        let run = RunState(score: 0, level: 0, xp: 0, equipped: equipped)
+        
+        return GameState(progression: progression, run: run, meta: MetaState())
+    }
 }
 
 struct ContentView: View {
     @State private var currentScreen: GameScreen = .mainMenu
+    @State private var loadedState: GameState? = nil
     
     enum GameScreen {
         case mainMenu
@@ -407,9 +567,13 @@ struct ContentView: View {
             Group {
                 switch currentScreen {
                 case .mainMenu:
-                    MainMenuView(currentScreen: $currentScreen)
+                    MainMenuView(currentScreen: $currentScreen, onNewGame: {
+                        loadedState = nil
+                    }, onContinue: {
+                        loadedState = SaveManager.shared.load()
+                    })
                 case .game:
-                    GameView(currentScreen: $currentScreen)
+                    GameView(currentScreen: $currentScreen, restore: loadedState)
                 case .upgradeShop:
                     UpgradeShopView(currentScreen: $currentScreen)
                 case .collection:
@@ -426,7 +590,9 @@ struct ContentView: View {
 
 struct MainMenuView: View {
     @Binding var currentScreen: ContentView.GameScreen
-    @AppStorage("hasExistingSave") private var hasExistingSave = false
+    @State private var hasSave: Bool = SaveManager.shared.load()?.run != nil
+    var onNewGame: (() -> Void)? = nil
+    var onContinue: (() -> Void)? = nil
     
     var body: some View {
         VStack(spacing: 20) {
@@ -436,15 +602,17 @@ struct MainMenuView: View {
             
             VStack(spacing: 15) {
                 Button("New Game") {
+                    onNewGame?()
                     currentScreen = .game
                 }
                 .buttonStyle(.borderedProminent)
                 
                 Button("Continue") {
+                    onContinue?()
                     currentScreen = .game
                 }
                 .buttonStyle(.bordered)
-                .disabled(!hasExistingSave)
+                .disabled(!hasSave)
                 
                 Button("Upgrade Shop") {
                     currentScreen = .upgradeShop
@@ -463,6 +631,9 @@ struct MainMenuView: View {
             }
             .padding()
         }
+        .onAppear {
+            hasSave = SaveManager.shared.load()?.run != nil
+        }
     }
 }
 
@@ -472,11 +643,11 @@ struct GameView: View {
     @StateObject private var viewModel: GameViewModel
     @State private var isPaused: Bool = false
     
-    init(currentScreen: Binding<ContentView.GameScreen>) {
+    init(currentScreen: Binding<ContentView.GameScreen>, restore: GameState? = nil) {
         self._currentScreen = currentScreen
         let manager = PowerUpManager()
         self._powerUpManager = StateObject(wrappedValue: manager)
-        self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager))
+        self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager, restore: restore))
     }
     
     var body: some View {
@@ -526,8 +697,10 @@ struct GameView: View {
                     .ignoresSafeArea()
                     .transition(.opacity)
                 
-                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen)
-                    .transition(.scale)
+                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen, onMainMenu: {
+                    viewModel.saveGameState()
+                })
+                .transition(.scale)
             }
             
             if viewModel.isLevelUpViewPresented {
@@ -640,6 +813,7 @@ struct PowerUpSlot: View {
 struct PauseMenuView: View {
     @Binding var isPaused: Bool
     @Binding var currentScreen: ContentView.GameScreen
+    var onMainMenu: (() -> Void)? = nil
     
     var body: some View {
         VStack(spacing: 20) {
@@ -660,6 +834,7 @@ struct PauseMenuView: View {
             .buttonStyle(.borderedProminent)
             
             Button(action: {
+                onMainMenu?()
                 currentScreen = .mainMenu
             }) {
                 HStack {
@@ -807,6 +982,27 @@ struct LevelUpView: View {
                         }
                     }
                 }
+                
+                HStack(spacing: 16) {
+                    Button(action: {
+                        viewModel.skipLevelUp()
+                    }) {
+                        Text("Skip")
+                            .foregroundColor(.gray)
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    if viewModel.hasReroll {
+                        Button(action: {
+                            viewModel.rerollChoices()
+                        }) {
+                            Text("Reroll")
+                                .foregroundColor(.blue)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.top, 8)
             }
             .padding(24)
             .background(
