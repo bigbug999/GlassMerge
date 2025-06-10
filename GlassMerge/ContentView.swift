@@ -41,12 +41,44 @@ struct RunState: Codable {
     var level: Int
     var xp: Int
     var equipped: [PowerUpSave?]
+    var spheres: [SphereState]
 }
 
 struct PowerUpSave: Codable {
     let id: String // power-up name key
     var level: Int
     var slotIndex: Int
+}
+
+struct SphereState: Codable {
+    var radius: CGFloat
+    var position: CGPoint
+    var color: String // "blue" or "purple" for now
+    
+    enum CodingKeys: String, CodingKey {
+        case radius, position, color
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(radius, forKey: .radius)
+        try container.encode(["x": position.x, "y": position.y], forKey: .position)
+        try container.encode(color, forKey: .color)
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        radius = try container.decode(CGFloat.self, forKey: .radius)
+        let posDict = try container.decode([String: CGFloat].self, forKey: .position)
+        position = CGPoint(x: posDict["x"] ?? 0, y: posDict["y"] ?? 0)
+        color = try container.decode(String.self, forKey: .color)
+    }
+    
+    init(radius: CGFloat, position: CGPoint, color: String) {
+        self.radius = radius
+        self.position = position
+        self.color = color
+    }
 }
 
 final class SaveManager {
@@ -309,8 +341,10 @@ class GameViewModel: ObservableObject {
     @Published var score: Int = 0
     @Published var xp: Int = 0
     @Published var level: Int = 1
+    @Published var isGamePaused: Bool = false
     let xpNeededPerLevel: Int = 10
     let powerUpManager: PowerUpManager
+    @Published private var sphereStates: [SphereState] = []
     
     // Define a type to represent either a new power-up or an upgrade
     enum PowerUpChoice: Identifiable {
@@ -360,9 +394,9 @@ class GameViewModel: ObservableObject {
             }
         }
 
-        // Restore equipped power-ups
-        equippedPowerUps = Array(repeating: nil, count: 6)
+        // Restore equipped power-ups and run state
         if let run = state.run {
+            equippedPowerUps = Array(repeating: nil, count: 6)
             for (slot, save) in run.equipped.enumerated() {
                 guard let save = save else { continue }
                 if let base = powerUpManager.powerUps.first(where: { $0.name == save.id }) {
@@ -375,6 +409,10 @@ class GameViewModel: ObservableObject {
             self.score = run.score
             self.xp = run.xp
             self.level = run.level
+            self.sphereStates = run.spheres
+            #if DEBUG
+            print("GameViewModel: Restored \(run.spheres.count) sphere states from save")
+            #endif
         }
     }
     
@@ -569,7 +607,7 @@ class GameViewModel: ObservableObject {
             guard let item = item else { return nil }
             return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index)
         }
-        let run = RunState(score: score, level: level, xp: xp, equipped: equipped)
+        let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates)
         
         return GameState(progression: progression, run: run, meta: MetaState())
     }
@@ -588,6 +626,21 @@ class GameViewModel: ObservableObject {
             #endif
             presentLevelUpChoices()
         }
+    }
+    
+    func getSphereStates() -> [SphereState]? {
+        #if DEBUG
+        print("GameViewModel: getSphereStates called, has \(sphereStates.count) states")
+        #endif
+        return sphereStates.isEmpty ? nil : sphereStates
+    }
+    
+    func saveSphereStates(_ states: [SphereState]) {
+        #if DEBUG
+        print("GameViewModel: Saving \(states.count) sphere states")
+        #endif
+        sphereStates = states
+        saveGameState()
     }
 }
 
@@ -740,12 +793,19 @@ struct GameView: View {
                     .transition(.opacity)
                 
                 PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen) {
+                    viewModel.isGamePaused = false
                     viewModel.saveGameState()
                 }
             }
         }
         .sheet(isPresented: $viewModel.isLevelUpViewPresented) {
             LevelUpView(viewModel: viewModel)
+        }
+        .onChange(of: isPaused) { newValue in
+            viewModel.isGamePaused = newValue
+        }
+        .onChange(of: viewModel.isLevelUpViewPresented) { newValue in
+            // Physics will pause automatically due to updateUIView
         }
     }
 }
@@ -1093,74 +1153,21 @@ struct PowerUpChoiceCard: View {
 }
 
 #if os(iOS)
-class GameScene: SKScene, SKPhysicsContactDelegate {
-    weak var viewModel: GameViewModel?
-    
-    override func didMove(to view: SKView) {
-        physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
-        physicsWorld.contactDelegate = self
-        
-        // Setup boundary physics body
-        let frame = SKPhysicsBody(edgeLoopFrom: self.frame)
-        frame.friction = 0.2
-        frame.restitution = 0.2
-        self.physicsBody = frame
-        
-        backgroundColor = .black
-    }
-    
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        let location = touch.location(in: self)
-        
-        // Create new sphere at touch location
-        let sphere = SKShapeNode(circleOfRadius: 25)
-        sphere.position = CGPoint(x: location.x, y: size.height - 50) // Start from top
-        sphere.fillColor = .blue
-        sphere.strokeColor = .white
-        
-        // Add physics body
-        sphere.physicsBody = SKPhysicsBody(circleOfRadius: 25)
-        sphere.physicsBody?.categoryBitMask = 1
-        sphere.physicsBody?.contactTestBitMask = 1
-        sphere.physicsBody?.collisionBitMask = 1
-        sphere.physicsBody?.restitution = 0.5
-        sphere.physicsBody?.friction = 0.2
-        sphere.physicsBody?.allowsRotation = true
-        
-        addChild(sphere)
-    }
-    
-    func didBegin(_ contact: SKPhysicsContact) {
-        guard let bodyA = contact.bodyA.node as? SKShapeNode,
-              let bodyB = contact.bodyB.node as? SKShapeNode else { return }
-        
-        // Basic merge check (same size spheres)
-        if bodyA.frame.width == bodyB.frame.width {
-            let newRadius = bodyA.frame.width * 0.75
-            bodyA.removeFromParent()
-            bodyB.removeFromParent()
-            
-            let mergedSphere = SKShapeNode(circleOfRadius: newRadius)
-            mergedSphere.position = contact.contactPoint
-            mergedSphere.fillColor = .purple
-            mergedSphere.strokeColor = .white
-            
-            mergedSphere.physicsBody = SKPhysicsBody(circleOfRadius: newRadius)
-            mergedSphere.physicsBody?.categoryBitMask = 1
-            mergedSphere.physicsBody?.contactTestBitMask = 1
-            mergedSphere.physicsBody?.collisionBitMask = 1
-            mergedSphere.physicsBody?.restitution = 0.5
-            mergedSphere.physicsBody?.friction = 0.2
-            
-            addChild(mergedSphere)
-            viewModel?.earnScore(points: 2)
-        }
-    }
-}
-
 struct SpriteKitContainer: UIViewRepresentable {
     @ObservedObject var viewModel: GameViewModel
+    
+    class Coordinator: NSObject {
+        var scene: GameScene?
+        let viewModel: GameViewModel
+        
+        init(viewModel: GameViewModel) {
+            self.viewModel = viewModel
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(viewModel: viewModel)
+    }
     
     func makeUIView(context: Context) -> SKView {
         let view = SKView()
@@ -1171,13 +1178,109 @@ struct SpriteKitContainer: UIViewRepresentable {
         let scene = GameScene(size: CGSize(width: 375, height: 650))
         scene.scaleMode = .fill
         scene.viewModel = viewModel
-        view.presentScene(scene)
+        context.coordinator.scene = scene
         
+        #if DEBUG
+        print("SpriteKitContainer: Creating new scene")
+        if let states = viewModel.getSphereStates() {
+            print("SpriteKitContainer: Found \(states.count) states to restore")
+        }
+        #endif
+        
+        view.presentScene(scene)
         return view
     }
     
     func updateUIView(_ view: SKView, context: Context) {
-        // Update if needed
+        if let scene = context.coordinator.scene {
+            // Ensure scene has latest viewModel reference
+            scene.viewModel = viewModel
+            
+            // Update pause state
+            scene.isPaused = viewModel.isGamePaused || viewModel.isLevelUpViewPresented
+            
+            // Force restore if we have states
+            if let states = viewModel.getSphereStates() {
+                #if DEBUG
+                print("SpriteKitContainer: Restoring \(states.count) spheres in update")
+                #endif
+                
+                // Clear existing spheres
+                scene.children.forEach { node in
+                    if node is SKShapeNode {
+                        node.removeFromParent()
+                    }
+                }
+                
+                // Recreate spheres from saved state
+                for state in states {
+                    scene.createSphere(at: state.position)
+                }
+            }
+        }
+    }
+}
+
+class GameScene: SKScene, SKPhysicsContactDelegate {
+    weak var viewModel: GameViewModel?
+    let sphereRadius: CGFloat = 25  // Fixed size for all spheres
+    
+    override func didMove(to view: SKView) {
+        physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+        
+        // Setup boundary physics body
+        let frame = SKPhysicsBody(edgeLoopFrom: self.frame)
+        frame.friction = 0.2
+        frame.restitution = 0.2
+        self.physicsBody = frame
+        
+        backgroundColor = .black
+        
+        // Restore spheres from saved state if available
+        if let sphereStates = viewModel?.getSphereStates() {
+            for state in sphereStates {
+                createSphere(at: state.position)
+            }
+        }
+    }
+    
+    func createSphere(at position: CGPoint) -> SKShapeNode {
+        let sphere = SKShapeNode(circleOfRadius: sphereRadius)
+        sphere.position = position
+        sphere.fillColor = .blue
+        sphere.strokeColor = .white
+        
+        sphere.physicsBody = SKPhysicsBody(circleOfRadius: sphereRadius)
+        sphere.physicsBody?.categoryBitMask = 1
+        sphere.physicsBody?.contactTestBitMask = 0  // No collision detection needed
+        sphere.physicsBody?.collisionBitMask = 1
+        sphere.physicsBody?.restitution = 0.5
+        sphere.physicsBody?.friction = 0.2
+        sphere.physicsBody?.allowsRotation = true
+        
+        addChild(sphere)
+        return sphere
+    }
+    
+    func getCurrentSphereStates() -> [SphereState] {
+        let states = children.compactMap { node -> SphereState? in
+            guard let sphere = node as? SKShapeNode else { return nil }
+            return SphereState(
+                radius: sphereRadius,
+                position: sphere.position,
+                color: "blue"
+            )
+        }
+        return states
+    }
+    
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        
+        _ = createSphere(at: CGPoint(x: location.x, y: size.height - 50))
+        viewModel?.saveSphereStates(getCurrentSphereStates())
+        viewModel?.earnScore(points: 1)
     }
 }
 #else
