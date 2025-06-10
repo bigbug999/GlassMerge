@@ -641,6 +641,17 @@ class GameViewModel: ObservableObject {
         sphereStates = states
         saveGameState(fromScene: false)
     }
+    
+    func reset() {
+        score = 0
+        xp = 0
+        level = 1
+        equippedPowerUps = Array(repeating: nil, count: 6)
+        powerUpChoices = []
+        hasReroll = true
+        isLevelUpViewPresented = false
+        sphereStates = []
+    }
 }
 
 struct ContentView: View {
@@ -735,6 +746,7 @@ struct GameView: View {
     @StateObject private var powerUpManager = PowerUpManager()
     @StateObject private var viewModel: GameViewModel
     @State private var isPaused: Bool = false
+    @State private var isGameOver: Bool = false
     
     init(currentScreen: Binding<ContentView.GameScreen>, restore state: GameState? = nil) {
         self._currentScreen = currentScreen
@@ -775,7 +787,7 @@ struct GameView: View {
                         .stroke(Color.gray.opacity(0.3), lineWidth: 2)
                         .frame(width: 375, height: 650)
                     
-                    SpriteKitContainer(viewModel: viewModel)
+                    SpriteKitContainer(viewModel: viewModel, isGameOver: $isGameOver)
                         .frame(width: 375, height: 650)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -794,6 +806,27 @@ struct GameView: View {
                 PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen, onMainMenu: {
                     viewModel.saveGameState()
                 })
+            }
+            
+            if isGameOver {
+                Color.black.opacity(0.7)
+                    .edgesIgnoringSafeArea(.all)
+                    .transition(.opacity)
+                
+                GameOverView(
+                    score: viewModel.score,
+                    onRestart: {
+                        isGameOver = false
+                        currentScreen = .mainMenu
+                        // Use a slight delay to ensure we're on the main menu before starting new game
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            currentScreen = .game
+                        }
+                    },
+                    onMainMenu: {
+                        currentScreen = .mainMenu
+                    }
+                )
             }
         }
         .sheet(isPresented: $viewModel.isLevelUpViewPresented) {
@@ -1153,21 +1186,68 @@ struct PowerUpChoiceCard: View {
     }
 }
 
+struct GameOverView: View {
+    let score: Int
+    let onRestart: () -> Void
+    let onMainMenu: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Game Over!")
+                .font(.title)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text("Score: \(score)")
+                .font(.title2)
+                .foregroundColor(.white)
+                .padding(.bottom, 20)
+            
+            Button(action: onRestart) {
+                HStack {
+                    Image(systemName: "arrow.clockwise")
+                    Text("Restart")
+                }
+                .frame(width: 200)
+            }
+            .buttonStyle(.borderedProminent)
+            
+            Button(action: onMainMenu) {
+                HStack {
+                    Image(systemName: "house.fill")
+                    Text("Main Menu")
+                }
+                .frame(width: 200)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(40)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color(white: 0.15))
+                .shadow(radius: 10)
+        )
+    }
+}
+
 #if os(iOS)
 struct SpriteKitContainer: UIViewRepresentable {
     @ObservedObject var viewModel: GameViewModel
+    @Binding var isGameOver: Bool
     
     class Coordinator: NSObject {
         var scene: GameScene?
         let viewModel: GameViewModel
+        let isGameOver: Binding<Bool>
         
-        init(viewModel: GameViewModel) {
+        init(viewModel: GameViewModel, isGameOver: Binding<Bool>) {
             self.viewModel = viewModel
+            self.isGameOver = isGameOver
         }
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(viewModel: viewModel)
+        Coordinator(viewModel: viewModel, isGameOver: $isGameOver)
     }
     
     func makeUIView(context: Context) -> SKView {
@@ -1179,18 +1259,16 @@ struct SpriteKitContainer: UIViewRepresentable {
         let scene = GameScene(size: CGSize(width: 375, height: 650))
         scene.scaleMode = .fill
         scene.viewModel = viewModel
+        scene.onGameOver = {
+            DispatchQueue.main.async {
+                context.coordinator.isGameOver.wrappedValue = true
+            }
+        }
         context.coordinator.scene = scene
         
         context.coordinator.viewModel.sphereStateProvider = { [weak scene] in
             return scene?.getCurrentSphereStates() ?? []
         }
-        
-        #if DEBUG
-        print("SpriteKitContainer: Creating new scene")
-        if let states = viewModel.getSphereStates() {
-            print("SpriteKitContainer: Found \(states.count) states to restore")
-        }
-        #endif
         
         view.presentScene(scene)
         return view
@@ -1198,10 +1276,7 @@ struct SpriteKitContainer: UIViewRepresentable {
     
     func updateUIView(_ view: SKView, context: Context) {
         if let scene = context.coordinator.scene {
-            // Ensure scene has latest viewModel reference
             scene.viewModel = viewModel
-            
-            // Update pause state
             scene.isPaused = viewModel.isGamePaused || viewModel.isLevelUpViewPresented
         }
     }
@@ -1209,6 +1284,17 @@ struct SpriteKitContainer: UIViewRepresentable {
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
     weak var viewModel: GameViewModel?
+    
+    private var currentSphere: SKShapeNode?
+    private var isTransitioning = false
+    private var dangerZone: SKShapeNode?
+    private var spheresInDangerZone = Set<SKPhysicsBody>()
+    private let topBufferHeight: CGFloat = 80
+    private let dangerGracePeriod: TimeInterval = 3.0
+    private let gameOverThreshold: TimeInterval = 5.0
+    private var dangerStartTime: TimeInterval?
+    
+    var onGameOver: (() -> Void)?
     
     struct TierInfo {
         let radius: CGFloat
@@ -1238,6 +1324,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         static let none: UInt32 = 0
         static let sphere: UInt32 = 0x1 << 0
         static let wall: UInt32 = 0x1 << 1
+        static let dangerZone: UInt32 = 0x1 << 2
     }
     
     private var scheduledForMerge = Set<SKShapeNode>()
@@ -1255,47 +1342,130 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         backgroundColor = .black
         
+        setupDangerZone()
+        
         // Restore spheres from saved state if available
-        if let sphereStates = viewModel?.getSphereStates() {
+        if let sphereStates = viewModel?.getSphereStates(), !sphereStates.isEmpty {
             for state in sphereStates {
-                _ = createSphere(at: state.position, tier: state.tier)
+                if let sphere = createAndPlaceSphere(at: state.position, tier: state.tier) {
+                    // Make restored spheres immediately "live" for the danger zone
+                    sphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
+                }
             }
+        }
+        
+        spawnNewSphere(at: nil, animated: false)
+    }
+    
+    func setupDangerZone() {
+        let dangerHeight: CGFloat = topBufferHeight
+        let dangerRect = CGRect(x: 0, y: frame.height - dangerHeight, width: frame.width, height: dangerHeight)
+        
+        dangerZone = SKShapeNode(rect: dangerRect)
+        dangerZone?.name = "dangerZone"
+        dangerZone?.fillColor = .clear
+        dangerZone?.strokeColor = .clear // Initially no stroke on the rect itself
+        
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: dangerRect.minY))
+        path.addLine(to: CGPoint(x: dangerRect.maxX, y: dangerRect.minY))
+        
+        let bottomLine = SKShapeNode(path: path)
+        bottomLine.name = "dangerZoneLine"
+        bottomLine.strokeColor = .gray
+        bottomLine.lineWidth = 2
+        dangerZone?.addChild(bottomLine)
+        
+        addChild(dangerZone!)
+        
+        let body = SKPhysicsBody(rectangleOf: dangerRect.size, center: CGPoint(x: dangerRect.midX, y: dangerRect.midY))
+        body.isDynamic = false
+        body.categoryBitMask = PhysicsCategory.dangerZone
+        body.contactTestBitMask = PhysicsCategory.sphere
+        body.collisionBitMask = PhysicsCategory.none
+        dangerZone?.physicsBody = body
+    }
+    
+    func spawnNewSphere(at position: CGPoint? = nil, animated: Bool) {
+        let tier = Int.random(in: 1...3)
+        guard let sphere = createSphereNode(tier: tier) else {
+            self.isTransitioning = false
+            return
+        }
+        
+        let spawnY = size.height - topBufferHeight
+        let spawnPosition = position ?? CGPoint(x: size.width / 2, y: spawnY)
+        sphere.position = spawnPosition
+        addChild(sphere)
+        
+        if animated {
+            sphere.setScale(0)
+            let scaleAction = SKAction.scale(to: 1.0, duration: 0.1)
+            scaleAction.timingMode = .easeOut
+            
+            sphere.run(scaleAction) { [weak self] in
+                self?.currentSphere = sphere
+                self?.isTransitioning = false
+            }
+        } else {
+            self.currentSphere = sphere
         }
     }
     
-    func createSphere(at position: CGPoint, tier: Int) -> SKShapeNode? {
+    func createSphereNode(tier: Int) -> SKShapeNode? {
         guard tier >= 1 && tier <= GameScene.tierData.count else { return nil }
         
         let tierIndex = tier - 1
         let tierInfo = GameScene.tierData[tierIndex]
         
         let sphere = SKShapeNode(circleOfRadius: tierInfo.radius)
-        sphere.position = position
         sphere.fillColor = tierInfo.color
         sphere.strokeColor = .white
         sphere.name = "sphere"
-        
         sphere.userData = ["tier": tier]
         
-        let body = SKPhysicsBody(circleOfRadius: tierInfo.radius)
-        body.categoryBitMask = PhysicsCategory.sphere
-        body.contactTestBitMask = PhysicsCategory.sphere
-        body.collisionBitMask = PhysicsCategory.sphere | PhysicsCategory.wall
-        body.restitution = 0.1
-        body.friction = 0.05
-        body.allowsRotation = true
-        body.linearDamping = 0.1
-        body.angularDamping = 0.1
-        
-        let maxTierMass: CGFloat = 12
-        let baseMass: CGFloat = 10.0
-        let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
-        body.mass = baseMass * massMultiplier
-        
-        sphere.physicsBody = body
-        
+        return sphere
+    }
+    
+    func createAndPlaceSphere(at position: CGPoint, tier: Int) -> SKShapeNode? {
+        guard let sphere = createSphereNode(tier: tier) else { return nil }
+        sphere.position = position
+        addPhysics(to: sphere)
         addChild(sphere)
         return sphere
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isPaused, !isTransitioning, let touch = touches.first, let sphere = currentSphere else { return }
+        let location = touch.location(in: self)
+        sphere.position.x = location.x
+    }
+    
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isPaused, !isTransitioning, let touch = touches.first, let sphere = currentSphere else { return }
+        let location = touch.location(in: self)
+        sphere.position.x = location.x
+    }
+    
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isPaused, !isTransitioning, let touch = touches.first, let sphereToDrop = currentSphere else { return }
+        
+        isTransitioning = true
+        
+        let location = touch.location(in: self)
+        sphereToDrop.position.x = location.x
+        
+        addPhysics(to: sphereToDrop)
+        
+        self.currentSphere = nil
+        
+        let spawnY = size.height - topBufferHeight
+        let spawnPosition = CGPoint(x: location.x, y: spawnY)
+        
+        // Use a slight delay to allow the dropped sphere to start falling before the next appears.
+        run(SKAction.wait(forDuration: 0.1)) { [weak self] in
+            self?.spawnNewSphere(at: spawnPosition, animated: true)
+        }
     }
     
     func getCurrentSphereStates() -> [SphereState] {
@@ -1309,22 +1479,64 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     func didBegin(_ contact: SKPhysicsContact) {
-        guard let nodeA = contact.bodyA.node as? SKShapeNode,
-              let nodeB = contact.bodyB.node as? SKShapeNode else { return }
+        let contactMask = contact.bodyA.categoryBitMask | contact.bodyB.categoryBitMask
+        
+        // Sphere-DangerZone contact
+        if contactMask == (PhysicsCategory.sphere | PhysicsCategory.dangerZone) {
+            let sphereBody = contact.bodyA.categoryBitMask == PhysicsCategory.sphere ? contact.bodyA : contact.bodyB
+            guard let sphereNode = sphereBody.node as? SKShapeNode,
+                  let creationTime = sphereNode.userData?["creationTime"] as? TimeInterval else { return }
+            
+            let currentTime = Date().timeIntervalSinceReferenceDate
+            if currentTime - creationTime >= dangerGracePeriod {
+                spheresInDangerZone.insert(sphereBody)
+                if let line = dangerZone?.childNode(withName: "dangerZoneLine") as? SKShapeNode {
+                    line.strokeColor = .red
+                }
+            }
+        }
+        
+        // Sphere-Sphere contact for merging
+        if contactMask == (PhysicsCategory.sphere | PhysicsCategory.sphere) {
+            guard let nodeA = contact.bodyA.node as? SKShapeNode,
+                  let nodeB = contact.bodyB.node as? SKShapeNode else { return }
 
-        guard nodeA.name == "sphere" && nodeB.name == "sphere" else { return }
-        guard !scheduledForMerge.contains(nodeA) && !scheduledForMerge.contains(nodeB) else { return }
+            guard !scheduledForMerge.contains(nodeA) && !scheduledForMerge.contains(nodeB) else { return }
 
-        guard let tierA = nodeA.userData?["tier"] as? Int,
-              let tierB = nodeB.userData?["tier"] as? Int else { return }
+            guard let tierA = nodeA.userData?["tier"] as? Int,
+                  let tierB = nodeB.userData?["tier"] as? Int else { return }
 
-        if tierA == tierB && tierA < maxTier {
-            scheduledForMerge.insert(nodeA)
-            scheduledForMerge.insert(nodeB)
+            if tierA == tierB && tierA < maxTier {
+                scheduledForMerge.insert(nodeA)
+                scheduledForMerge.insert(nodeB)
+            }
         }
     }
     
     override func update(_ currentTime: TimeInterval) {
+        // Cleanup stale bodies from danger zone set
+        spheresInDangerZone = spheresInDangerZone.filter { $0.node != nil }
+        
+        // Update danger zone state
+        if !spheresInDangerZone.isEmpty {
+            if dangerStartTime == nil {
+                dangerStartTime = currentTime
+            } else if currentTime - dangerStartTime! >= gameOverThreshold {
+                isPaused = true
+                onGameOver?()
+                return
+            }
+            
+            if let line = dangerZone?.childNode(withName: "dangerZoneLine") as? SKShapeNode {
+                line.strokeColor = .red
+            }
+        } else {
+            dangerStartTime = nil
+            if let line = dangerZone?.childNode(withName: "dangerZoneLine") as? SKShapeNode {
+                line.strokeColor = .gray
+            }
+        }
+        
         guard !scheduledForMerge.isEmpty else { return }
         
         var toMerge = scheduledForMerge
@@ -1346,7 +1558,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 nodeA.removeFromParent()
                 nodeB.removeFromParent()
                 
-                _ = createSphere(at: middlePoint, tier: nextTier)
+                if let newSphere = createAndPlaceSphere(at: middlePoint, tier: nextTier) {
+                    // Make merged spheres immediately "live" for the danger zone
+                    newSphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
+                }
                 viewModel?.earnScore(points: 1)
                 
             } else {
@@ -1356,11 +1571,49 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
     
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !isPaused, let touch = touches.first else { return }
-        let location = touch.location(in: self)
+    func addPhysics(to sphere: SKShapeNode) {
+        guard sphere.physicsBody == nil,
+              let tier = sphere.userData?["tier"] as? Int,
+              let pathWidth = sphere.path?.boundingBox.width,
+              pathWidth > 0
+        else { return }
         
-        _ = createSphere(at: CGPoint(x: location.x, y: size.height - 80), tier: 1)
+        let radius = pathWidth / 2
+        
+        let body = SKPhysicsBody(circleOfRadius: radius)
+        body.categoryBitMask = PhysicsCategory.sphere
+        body.contactTestBitMask = PhysicsCategory.sphere | PhysicsCategory.dangerZone
+        body.collisionBitMask = PhysicsCategory.sphere | PhysicsCategory.wall
+        body.restitution = 0.1
+        body.friction = 0.05
+        body.allowsRotation = true
+        body.linearDamping = 0.1
+        body.angularDamping = 0.1
+        
+        let maxTierMass: CGFloat = 12
+        let baseMass: CGFloat = 10.0
+        let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
+        body.mass = baseMass * massMultiplier
+        
+        sphere.physicsBody = body
+        
+        // Add creation timestamp when physics is added (when the ball is dropped)
+        sphere.userData?["creationTime"] = Date().timeIntervalSinceReferenceDate
+    }
+    
+    func didEnd(_ contact: SKPhysicsContact) {
+        let contactMask = contact.bodyA.categoryBitMask | contact.bodyB.categoryBitMask
+        if contactMask == (PhysicsCategory.sphere | PhysicsCategory.dangerZone) {
+            
+            let sphereBody = contact.bodyA.categoryBitMask == PhysicsCategory.sphere ? contact.bodyA : contact.bodyB
+            spheresInDangerZone.remove(sphereBody)
+            
+            if spheresInDangerZone.isEmpty {
+                if let line = dangerZone?.childNode(withName: "dangerZoneLine") as? SKShapeNode {
+                    line.strokeColor = .gray
+                }
+            }
+        }
     }
 }
 #else
