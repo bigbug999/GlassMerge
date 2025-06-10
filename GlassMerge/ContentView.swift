@@ -1217,18 +1217,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // From cyan to a dark gray/black
     static let tierData: [TierInfo] = [
-        TierInfo(radius: 20, color: .cyan),
-        TierInfo(radius: 25, color: .green),
-        TierInfo(radius: 30, color: .yellow),
-        TierInfo(radius: 35, color: .orange),
-        TierInfo(radius: 40, color: .red),
-        TierInfo(radius: 45, color: .magenta),
-        TierInfo(radius: 50, color: .purple),
-        TierInfo(radius: 55, color: .brown),
-        TierInfo(radius: 60, color: SKColor(white: 0.8, alpha: 1.0)),
-        TierInfo(radius: 65, color: SKColor(white: 0.6, alpha: 1.0)),
-        TierInfo(radius: 70, color: SKColor(white: 0.4, alpha: 1.0)),
-        TierInfo(radius: 75, color: SKColor(white: 0.2, alpha: 1.0))
+        TierInfo(radius: 16,  color: SKColor(white: 0.60, alpha: 1.0)),
+        TierInfo(radius: 25,  color: SKColor(white: 0.20, alpha: 1.0)),
+        TierInfo(radius: 34,  color: SKColor(white: 0.66, alpha: 1.0)),
+        TierInfo(radius: 42,  color: SKColor(white: 0.26, alpha: 1.0)),
+        TierInfo(radius: 52,  color: SKColor(white: 0.72, alpha: 1.0)),
+        TierInfo(radius: 60,  color: SKColor(white: 0.32, alpha: 1.0)),
+        TierInfo(radius: 68,  color: SKColor(white: 0.78, alpha: 1.0)),
+        TierInfo(radius: 76,  color: SKColor(white: 0.38, alpha: 1.0)),
+        TierInfo(radius: 87,  color: SKColor(white: 0.84, alpha: 1.0)),
+        TierInfo(radius: 94,  color: SKColor(white: 0.44, alpha: 1.0)),
+        TierInfo(radius: 98,  color: SKColor(white: 0.90, alpha: 1.0)),
+        TierInfo(radius: 102, color: SKColor(white: 0.50, alpha: 1.0))
     ]
     let maxTier = tierData.count
     
