@@ -51,33 +51,30 @@ struct PowerUpSave: Codable {
 }
 
 struct SphereState: Codable {
-    var radius: CGFloat
+    var tier: Int
     var position: CGPoint
-    var color: String // "blue" or "purple" for now
     
     enum CodingKeys: String, CodingKey {
-        case radius, position, color
+        case tier, position, radius, color // Keep old keys for decoding compatibility
     }
     
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(radius, forKey: .radius)
+        try container.encode(tier, forKey: .tier)
         try container.encode(["x": position.x, "y": position.y], forKey: .position)
-        try container.encode(color, forKey: .color)
     }
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        radius = try container.decode(CGFloat.self, forKey: .radius)
+        // If 'tier' exists, use it. Otherwise, default to 1 for old save data.
+        self.tier = (try? container.decode(Int.self, forKey: .tier)) ?? 1
         let posDict = try container.decode([String: CGFloat].self, forKey: .position)
-        position = CGPoint(x: posDict["x"] ?? 0, y: posDict["y"] ?? 0)
-        color = try container.decode(String.self, forKey: .color)
+        self.position = CGPoint(x: posDict["x"] ?? 0, y: posDict["y"] ?? 0)
     }
     
-    init(radius: CGFloat, position: CGPoint, color: String) {
-        self.radius = radius
+    init(tier: Int, position: CGPoint) {
+        self.tier = tier
         self.position = position
-        self.color = color
     }
 }
 
@@ -342,7 +339,7 @@ class GameViewModel: ObservableObject {
     @Published var xp: Int = 0
     @Published var level: Int = 1
     @Published var isGamePaused: Bool = false
-    let xpNeededPerLevel: Int = 10
+    let xpNeededPerLevel: Int = 30
     let powerUpManager: PowerUpManager
     @Published private var sphereStates: [SphereState] = []
     var sphereStateProvider: (() -> [SphereState])?
@@ -1212,40 +1209,80 @@ struct SpriteKitContainer: UIViewRepresentable {
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
     weak var viewModel: GameViewModel?
-    let sphereRadius: CGFloat = 25  // Fixed size for all spheres
+    
+    struct TierInfo {
+        let radius: CGFloat
+        let color: SKColor
+    }
+    
+    // From cyan to a dark gray/black
+    static let tierData: [TierInfo] = [
+        TierInfo(radius: 20, color: .cyan),
+        TierInfo(radius: 25, color: .green),
+        TierInfo(radius: 30, color: .yellow),
+        TierInfo(radius: 35, color: .orange),
+        TierInfo(radius: 40, color: .red),
+        TierInfo(radius: 45, color: .magenta),
+        TierInfo(radius: 50, color: .purple),
+        TierInfo(radius: 55, color: .brown),
+        TierInfo(radius: 60, color: SKColor(white: 0.8, alpha: 1.0)),
+        TierInfo(radius: 65, color: SKColor(white: 0.6, alpha: 1.0)),
+        TierInfo(radius: 70, color: SKColor(white: 0.4, alpha: 1.0)),
+        TierInfo(radius: 75, color: SKColor(white: 0.2, alpha: 1.0))
+    ]
+    let maxTier = tierData.count
+    
+    struct PhysicsCategory {
+        static let none: UInt32 = 0
+        static let sphere: UInt32 = 0x1 << 0
+        static let wall: UInt32 = 0x1 << 1
+    }
+    
+    private var scheduledForMerge = Set<SKShapeNode>()
     
     override func didMove(to view: SKView) {
         physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+        physicsWorld.contactDelegate = self
         
         // Setup boundary physics body
         let frame = SKPhysicsBody(edgeLoopFrom: self.frame)
         frame.friction = 0.2
         frame.restitution = 0.2
         self.physicsBody = frame
+        self.physicsBody?.categoryBitMask = PhysicsCategory.wall
         
         backgroundColor = .black
         
         // Restore spheres from saved state if available
         if let sphereStates = viewModel?.getSphereStates() {
             for state in sphereStates {
-                createSphere(at: state.position)
+                _ = createSphere(at: state.position, tier: state.tier)
             }
         }
     }
     
-    func createSphere(at position: CGPoint) -> SKShapeNode {
-        let sphere = SKShapeNode(circleOfRadius: sphereRadius)
-        sphere.position = position
-        sphere.fillColor = .blue
-        sphere.strokeColor = .white
+    func createSphere(at position: CGPoint, tier: Int) -> SKShapeNode? {
+        guard tier >= 1 && tier <= GameScene.tierData.count else { return nil }
         
-        sphere.physicsBody = SKPhysicsBody(circleOfRadius: sphereRadius)
-        sphere.physicsBody?.categoryBitMask = 1
-        sphere.physicsBody?.contactTestBitMask = 0  // No collision detection needed
-        sphere.physicsBody?.collisionBitMask = 1
-        sphere.physicsBody?.restitution = 0.5
+        let tierIndex = tier - 1
+        let tierInfo = GameScene.tierData[tierIndex]
+        
+        let sphere = SKShapeNode(circleOfRadius: tierInfo.radius)
+        sphere.position = position
+        sphere.fillColor = tierInfo.color
+        sphere.strokeColor = .white
+        sphere.name = "sphere"
+        
+        sphere.userData = ["tier": tier]
+        
+        sphere.physicsBody = SKPhysicsBody(circleOfRadius: tierInfo.radius)
+        sphere.physicsBody?.categoryBitMask = PhysicsCategory.sphere
+        sphere.physicsBody?.contactTestBitMask = PhysicsCategory.sphere
+        sphere.physicsBody?.collisionBitMask = PhysicsCategory.sphere | PhysicsCategory.wall
+        sphere.physicsBody?.restitution = 0.3
         sphere.physicsBody?.friction = 0.2
         sphere.physicsBody?.allowsRotation = true
+        sphere.physicsBody?.linearDamping = 0.1
         
         addChild(sphere)
         return sphere
@@ -1253,22 +1290,67 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     func getCurrentSphereStates() -> [SphereState] {
         let states = children.compactMap { node -> SphereState? in
-            guard let sphere = node as? SKShapeNode else { return nil }
-            return SphereState(
-                radius: sphereRadius,
-                position: sphere.position,
-                color: "blue"
-            )
+            guard let sphere = node as? SKShapeNode,
+                  sphere.name == "sphere",
+                  let tier = sphere.userData?["tier"] as? Int else { return nil }
+            return SphereState(tier: tier, position: sphere.position)
         }
         return states
     }
     
+    func didBegin(_ contact: SKPhysicsContact) {
+        guard let nodeA = contact.bodyA.node as? SKShapeNode,
+              let nodeB = contact.bodyB.node as? SKShapeNode else { return }
+
+        guard nodeA.name == "sphere" && nodeB.name == "sphere" else { return }
+        guard !scheduledForMerge.contains(nodeA) && !scheduledForMerge.contains(nodeB) else { return }
+
+        guard let tierA = nodeA.userData?["tier"] as? Int,
+              let tierB = nodeB.userData?["tier"] as? Int else { return }
+
+        if tierA == tierB && tierA < maxTier {
+            scheduledForMerge.insert(nodeA)
+            scheduledForMerge.insert(nodeB)
+        }
+    }
+    
+    override func update(_ currentTime: TimeInterval) {
+        guard !scheduledForMerge.isEmpty else { return }
+        
+        var toMerge = scheduledForMerge
+        scheduledForMerge.removeAll()
+        
+        while !toMerge.isEmpty {
+            let nodeA = toMerge.removeFirst()
+            
+            // Find a merge partner from the remaining set
+            guard let tierA = nodeA.userData?["tier"] as? Int else { continue }
+            
+            if let nodeB = toMerge.first(where: { ($0.userData?["tier"] as? Int) == tierA }) {
+                toMerge.remove(nodeB) // Partner found and removed from set
+                
+                let nextTier = tierA + 1
+                let middlePoint = CGPoint(x: (nodeA.position.x + nodeB.position.x) / 2,
+                                          y: (nodeA.position.y + nodeB.position.y) / 2)
+                
+                nodeA.removeFromParent()
+                nodeB.removeFromParent()
+                
+                _ = createSphere(at: middlePoint, tier: nextTier)
+                viewModel?.earnScore(points: 1)
+                
+            } else {
+                // No partner found for nodeA in this batch, maybe it was a 3-way collision.
+                // It can try again next frame if it collides with a new partner.
+            }
+        }
+    }
+    
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
+        guard !isPaused, let touch = touches.first else { return }
         let location = touch.location(in: self)
         
-        _ = createSphere(at: CGPoint(x: location.x, y: size.height - 50))
-        viewModel?.earnScore(points: 1)
+        _ = createSphere(at: CGPoint(x: location.x, y: size.height - 80), tier: 1)
     }
 }
 #else
