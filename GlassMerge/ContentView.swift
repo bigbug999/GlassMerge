@@ -82,6 +82,7 @@ struct PowerUp: Identifiable {
     var isUnlocked: Bool
     var level: Int
     var cost: Int
+    var slotIndex: Int? // Track where this power-up starts
     
     // Computed properties
     var baseStats: PowerUpStats {
@@ -95,13 +96,17 @@ struct PowerUp: Identifiable {
     // Game state
     var isActive: Bool = false
     var remainingCooldown: TimeInterval = 0
+    var hasBeenOffered: Bool = false
+    var slotsOccupied: Int {
+        return level
+    }
     
     // Upgrade costs
     var upgradeCost: Int {
         return cost * level
     }
     
-    static let maxLevel = 5
+    static let maxLevel = 3
 }
 
 class PowerUpManager: ObservableObject {
@@ -216,28 +221,173 @@ class PowerUpManager: ObservableObject {
 class GameViewModel: ObservableObject {
     @Published var equippedPowerUps: [PowerUp?] = Array(repeating: nil, count: 6)
     @Published var isLevelUpViewPresented = false
-    @Published var powerUpChoices: [PowerUp] = []
+    @Published var powerUpChoices: [PowerUpChoice] = []
     let powerUpManager: PowerUpManager
+    
+    // Define a type to represent either a new power-up or an upgrade
+    enum PowerUpChoice: Identifiable {
+        case new(PowerUp)
+        case upgrade(PowerUp)
+        
+        var id: UUID {
+            switch self {
+            case .new(let powerUp), .upgrade(let powerUp):
+                return powerUp.id
+            }
+        }
+        
+        var powerUp: PowerUp {
+            switch self {
+            case .new(let powerUp), .upgrade(let powerUp):
+                return powerUp
+            }
+        }
+        
+        var isUpgrade: Bool {
+            switch self {
+            case .new: return false
+            case .upgrade: return true
+            }
+        }
+    }
     
     init(powerUpManager: PowerUpManager) {
         self.powerUpManager = powerUpManager
     }
     
     func presentLevelUpChoices() {
-        // Get all available power-ups
-        let availablePowerUps = powerUpManager.powerUps
+        var choices: [PowerUpChoice] = []
         
-        // Randomly select 3 unique power-ups
-        powerUpChoices = Array(availablePowerUps.shuffled().prefix(3))
+        // Get available new power-ups
+        let newPowerUps = powerUpManager.powerUps
+            .filter { !$0.hasBeenOffered }
+            .map { PowerUpChoice.new($0) }
+        
+        // Get upgradeable power-ups
+        let upgradeablePowerUps = getUpgradeablePowerUps()
+            .map { PowerUpChoice.upgrade($0) }
+        
+        // Combine and shuffle all options
+        choices = (newPowerUps + upgradeablePowerUps).shuffled()
+        
+        // Take first 3 or all if less than 3
+        powerUpChoices = Array(choices.prefix(3))
         isLevelUpViewPresented = true
     }
     
-    func selectPowerUp(_ powerUp: PowerUp) {
-        // Find first empty slot
-        if let emptyIndex = equippedPowerUps.firstIndex(where: { $0 == nil }) {
-            equippedPowerUps[emptyIndex] = powerUp
+    private func getUpgradeablePowerUps() -> [PowerUp] {
+        return equippedPowerUps.compactMap { $0 }
+            .filter { $0.level < PowerUp.maxLevel }
+            .filter { hasEnoughSlotsForUpgrade($0) }
+    }
+    
+    private func hasEnoughSlotsForUpgrade(_ powerUp: PowerUp) -> Bool {
+        // Find the start index of this power-up
+        guard let currentIndex = powerUp.slotIndex ?? equippedPowerUps.firstIndex(where: { $0?.id == powerUp.id }) else {
+            return false
+        }
+        
+        let neededSlots = powerUp.level + 1 // Next level needs this many slots
+        var availableSlots = 0
+        
+        // Count available slots starting from the power-up's current position
+        for i in currentIndex..<equippedPowerUps.count {
+            let slot = equippedPowerUps[i]
+            if slot == nil || slot?.id == powerUp.id {
+                availableSlots += 1
+                if availableSlots >= neededSlots {
+                    return true
+                }
+            } else {
+                break
+            }
+        }
+        
+        return false
+    }
+    
+    func selectPowerUp(_ choice: PowerUpChoice) {
+        switch choice {
+        case .new(let powerUp):
+            addNewPowerUp(powerUp)
+        case .upgrade(let powerUp):
+            upgradePowerUp(powerUp)
         }
         isLevelUpViewPresented = false
+    }
+    
+    private func addNewPowerUp(_ powerUp: PowerUp) {
+        var newPowerUp = powerUp
+        newPowerUp.hasBeenOffered = true
+        
+        // Find first empty slot
+        if let startIndex = findFirstEmptySlot() {
+            newPowerUp.slotIndex = startIndex
+            equippedPowerUps[startIndex] = newPowerUp
+            
+            // Mark the power-up as offered in the manager
+            if let index = powerUpManager.powerUps.firstIndex(where: { $0.id == powerUp.id }) {
+                powerUpManager.powerUps[index].hasBeenOffered = true
+            }
+        }
+    }
+    
+    private func upgradePowerUp(_ powerUp: PowerUp) {
+        // Find all instances of this power-up
+        let instances = equippedPowerUps.enumerated()
+            .filter { $0.element?.id == powerUp.id }
+            .map { $0.offset }
+        
+        guard let startIndex = instances.first else { return }
+        
+        // Create upgraded version
+        var upgradedPowerUp = powerUp
+        upgradedPowerUp.level += 1
+        upgradedPowerUp.slotIndex = startIndex
+        
+        // Clear all slots occupied by any instance of this power-up
+        for index in instances {
+            clearSlotsForPowerUp(startingAt: index)
+        }
+        
+        // Place upgraded version in consecutive slots
+        for i in startIndex..<min(startIndex + upgradedPowerUp.slotsOccupied, equippedPowerUps.count) {
+            equippedPowerUps[i] = upgradedPowerUp
+        }
+    }
+    
+    private func findFirstEmptySlot() -> Int? {
+        var consecutiveEmpty = 0
+        var startIndex: Int?
+        
+        for (index, slot) in equippedPowerUps.enumerated() {
+            if slot == nil {
+                if startIndex == nil {
+                    startIndex = index
+                }
+                consecutiveEmpty += 1
+                if consecutiveEmpty >= 1 { // For new power-ups, we only need 1 slot
+                    return startIndex
+                }
+            } else {
+                consecutiveEmpty = 0
+                startIndex = nil
+            }
+        }
+        return nil
+    }
+    
+    private func clearSlotsForPowerUp(startingAt index: Int) {
+        let powerUp = equippedPowerUps[index]
+        guard let powerUp = powerUp else { return }
+        
+        // Find all slots occupied by this power-up instance
+        let slotsToCheck = min(index + powerUp.slotsOccupied, equippedPowerUps.count)
+        for i in index..<slotsToCheck {
+            if equippedPowerUps[i]?.id == powerUp.id {
+                equippedPowerUps[i] = nil
+            }
+        }
     }
 }
 
@@ -270,6 +420,7 @@ struct ContentView: View {
             }
             .navigationBarBackButtonHidden(true)
         }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -354,7 +505,7 @@ struct GameView: View {
                 
                 // Game area with test level up button
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.blue, lineWidth: 2)
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 2)
                     .frame(width: 375, height: 500)
                     .overlay(
                         Button("Level Up!") {
@@ -371,7 +522,7 @@ struct GameView: View {
             }
             
             if isPaused {
-                Color.black.opacity(0.4)
+                Color.black.opacity(0.7)
                     .ignoresSafeArea()
                     .transition(.opacity)
                 
@@ -390,44 +541,99 @@ struct GameView: View {
 struct PowerUpSlotView: View {
     let powerUps: [PowerUp?]
     let slotSize: CGFloat = 50
+    let spacing: CGFloat = 12
     
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: spacing) {
             ForEach(0..<6) { index in
-                if index < powerUps.count {
-                    PowerUpSlot(powerUp: powerUps[index])
-                } else {
-                    PowerUpSlot(powerUp: nil)
+                if shouldDrawSlot(at: index) {
+                    PowerUpSlot(
+                        powerUp: powerUps[index],
+                        isPartOfMultiSlot: isPartOfMultiSlot(index),
+                        isFirstSlot: isFirstSlotOfPowerUp(index),
+                        totalSlots: slotsForPowerUp(at: index)
+                    )
+                    .frame(width: calculateSlotWidth(for: index))
                 }
             }
         }
+    }
+    
+    private func shouldDrawSlot(at index: Int) -> Bool {
+        // Only draw if this is the first slot of a power-up or an empty slot
+        if let powerUp = powerUps[index] {
+            return isFirstSlotOfPowerUp(index)
+        }
+        return true // Empty slots always draw
+    }
+    
+    private func isFirstSlotOfPowerUp(_ index: Int) -> Bool {
+        guard let currentPowerUp = powerUps[index] else { return false }
+        return index == 0 || powerUps[index - 1]?.id != currentPowerUp.id
+    }
+    
+    private func isPartOfMultiSlot(_ index: Int) -> Bool {
+        guard let currentPowerUp = powerUps[index] else { return false }
+        return currentPowerUp.slotsOccupied > 1
+    }
+    
+    private func slotsForPowerUp(at index: Int) -> Int {
+        return powerUps[index]?.slotsOccupied ?? 1
+    }
+    
+    private func calculateSlotWidth(for index: Int) -> CGFloat {
+        guard let powerUp = powerUps[index], isFirstSlotOfPowerUp(index) else {
+            return slotSize
+        }
+        let slots = CGFloat(powerUp.slotsOccupied)
+        return slotSize * slots + spacing * (slots - 1)
     }
 }
 
 struct PowerUpSlot: View {
     let powerUp: PowerUp?
+    let isPartOfMultiSlot: Bool
+    let isFirstSlot: Bool
+    let totalSlots: Int
+    
+    init(powerUp: PowerUp?, isPartOfMultiSlot: Bool = false, isFirstSlot: Bool = true, totalSlots: Int = 1) {
+        self.powerUp = powerUp
+        self.isPartOfMultiSlot = isPartOfMultiSlot
+        self.isFirstSlot = isFirstSlot
+        self.totalSlots = totalSlots
+    }
     
     var body: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .stroke(Color.gray, lineWidth: 2)
-            .frame(width: 50, height: 50)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.8))
-            )
-            .overlay(
-                Group {
-                    if let powerUp = powerUp {
-                        Image(systemName: powerUp.icon)
-                            .foregroundColor(powerUp.isUnlocked ? .blue : .gray)
-                            .font(.system(size: 20))
-                    } else {
-                        Image(systemName: "questionmark.circle")
-                            .foregroundColor(.gray)
-                            .font(.system(size: 20))
+        GeometryReader { geometry in
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.gray.opacity(0.1))
+                )
+                .overlay(
+                    Group {
+                        if let powerUp = powerUp {
+                            VStack(spacing: 2) {
+                                Image(systemName: powerUp.icon)
+                                    .foregroundColor(.blue)
+                                    .font(.system(size: 20))
+                                if powerUp.level > 1 {
+                                    Text("Lv\(powerUp.level)")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.gray)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                        } else {
+                            Image(systemName: "questionmark.circle")
+                                .foregroundColor(.gray.opacity(0.5))
+                                .font(.system(size: 20))
+                        }
                     }
-                }
-            )
+                )
+        }
+        .frame(height: 50)
     }
 }
 
@@ -586,7 +792,7 @@ struct LevelUpView: View {
     
     var body: some View {
         ZStack {
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.7)
                 .ignoresSafeArea()
             
             VStack(spacing: 16) {
@@ -595,9 +801,9 @@ struct LevelUpView: View {
                     .foregroundColor(.white)
                 
                 HStack(spacing: 12) {
-                    ForEach(viewModel.powerUpChoices) { powerUp in
-                        PowerUpChoiceCard(powerUp: powerUp) {
-                            viewModel.selectPowerUp(powerUp)
+                    ForEach(viewModel.powerUpChoices) { choice in
+                        PowerUpChoiceCard(choice: choice) {
+                            viewModel.selectPowerUp(choice)
                         }
                     }
                 }
@@ -605,35 +811,43 @@ struct LevelUpView: View {
             .padding(24)
             .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.gray.opacity(0.9))
+                    .fill(Color(white: 0.15))
             )
         }
     }
 }
 
 struct PowerUpChoiceCard: View {
-    let powerUp: PowerUp
+    let choice: GameViewModel.PowerUpChoice
     let onSelect: () -> Void
     
     var body: some View {
         Button(action: onSelect) {
             VStack(spacing: 8) {
-                Image(systemName: powerUp.icon)
+                Image(systemName: choice.powerUp.icon)
                     .font(.system(size: 24))
                     .foregroundColor(.blue)
                 
-                Text(powerUp.name)
-                    .font(.subheadline)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 2) {
+                    Text(choice.powerUp.name)
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    if choice.isUpgrade {
+                        Text("Upgrade to Lv\(choice.powerUp.level + 1)")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                }
             }
             .frame(width: 100)
             .padding(.vertical, 12)
             .padding(.horizontal, 8)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white)
+                    .fill(Color(white: 0.2))
             )
         }
         .buttonStyle(.plain)
