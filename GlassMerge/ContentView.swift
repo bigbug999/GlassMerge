@@ -10,6 +10,7 @@ import Foundation
 import SpriteKit
 #if os(iOS)
 import UIKit
+import CoreHaptics
 #endif
 
 // MARK: - SAVE SYSTEM (embedded)
@@ -1457,6 +1458,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         addPhysics(to: sphereToDrop)
         
+        #if os(iOS)
+        HapticManager.shared.playDropHaptic()
+        #endif
+        
         self.currentSphere = nil
         
         let spawnY = size.height - topBufferHeight
@@ -1564,6 +1569,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 }
                 viewModel?.earnScore(points: 1)
                 
+                #if os(iOS)
+                HapticManager.shared.playMergeHaptic()
+                #endif
+                
             } else {
                 // No partner found for nodeA in this batch, maybe it was a 3-way collision.
                 // It can try again next frame if it collides with a new partner.
@@ -1613,6 +1622,70 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     line.strokeColor = .gray
                 }
             }
+        }
+    }
+}
+
+class HapticManager {
+    static let shared = HapticManager()
+    private var engine: CHHapticEngine?
+    
+    init() {
+        prepareHaptics()
+    }
+    
+    private func prepareHaptics() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
+        
+        do {
+            engine = try CHHapticEngine()
+            try engine?.start()
+            
+            // Restart the engine if it stops due to timeout or other reasons
+            engine?.resetHandler = { [weak self] in
+                self?.prepareHaptics()
+            }
+            
+            engine?.stoppedHandler = { reason in
+                print("Haptic engine stopped: \(reason)")
+            }
+            
+        } catch {
+            print("Failed to create haptic engine: \(error.localizedDescription)")
+        }
+    }
+    
+    func playMergeHaptic() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics,
+              let engine = engine else { return }
+        
+        do {
+            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.8)
+            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.9)
+            let event = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity, sharpness], relativeTime: 0)
+            
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: 0)
+        } catch {
+            print("Failed to play merge haptic: \(error.localizedDescription)")
+        }
+    }
+    
+    func playDropHaptic() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics,
+              let engine = engine else { return }
+        
+        do {
+            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.4)
+            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
+            let event = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity, sharpness], relativeTime: 0)
+            
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: 0)
+        } catch {
+            print("Failed to play drop haptic: \(error.localizedDescription)")
         }
     }
 }
