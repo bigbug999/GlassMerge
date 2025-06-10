@@ -7,6 +7,10 @@
 
 import SwiftUI
 import Foundation
+import SpriteKit
+#if os(iOS)
+import UIKit
+#endif
 
 // MARK: - SAVE SYSTEM (embedded)
 struct GameState: Codable {
@@ -680,17 +684,16 @@ struct GameView: View {
     @StateObject private var viewModel: GameViewModel
     @State private var isPaused: Bool = false
     
-    init(currentScreen: Binding<ContentView.GameScreen>, restore: GameState? = nil) {
+    init(currentScreen: Binding<ContentView.GameScreen>, restore state: GameState? = nil) {
         self._currentScreen = currentScreen
         let manager = PowerUpManager()
         self._powerUpManager = StateObject(wrappedValue: manager)
-        self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager, restore: restore))
+        self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager, restore: state))
     }
     
     var body: some View {
         ZStack {
-            Color.black.opacity(0.1)
-                .ignoresSafeArea()
+            Color.black.edgesIgnoringSafeArea(.all)
             
             VStack {
                 HStack {
@@ -715,47 +718,40 @@ struct GameView: View {
                 }
                 .padding()
                 
-                Spacer()
-                
-                // Game area with test level up button
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 2)
-                    .frame(width: 375, height: 650)
-                    .overlay(
-                        Button("Score") {
-                            viewModel.earnScore()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    )
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                        .frame(width: 375, height: 650)
+                    
+                    SpriteKitContainer(viewModel: viewModel)
+                        .frame(width: 375, height: 650)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
                 
                 Spacer()
                 
-                // Power-up slots
-                PowerUpSlotView(powerUps: viewModel.equippedPowerUps)
-                    .padding()
+                PowerUpSlotView(powerUps: $viewModel.equippedPowerUps)
+                    .padding(.bottom)
             }
             
             if isPaused {
                 Color.black.opacity(0.7)
-                    .ignoresSafeArea()
+                    .edgesIgnoringSafeArea(.all)
                     .transition(.opacity)
                 
-                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen, onMainMenu: {
+                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen) {
                     viewModel.saveGameState()
-                })
-                .transition(.scale)
+                }
             }
-            
-            if viewModel.isLevelUpViewPresented {
-                LevelUpView(viewModel: viewModel)
-                    .transition(.scale)
-            }
+        }
+        .sheet(isPresented: $viewModel.isLevelUpViewPresented) {
+            LevelUpView(viewModel: viewModel)
         }
     }
 }
 
 struct PowerUpSlotView: View {
-    let powerUps: [PowerUp?]
+    @Binding var powerUps: [PowerUp?]
     let slotSize: CGFloat = 50
     let spacing: CGFloat = 12
     
@@ -1095,6 +1091,104 @@ struct PowerUpChoiceCard: View {
         .buttonStyle(.plain)
     }
 }
+
+#if os(iOS)
+class GameScene: SKScene, SKPhysicsContactDelegate {
+    weak var viewModel: GameViewModel?
+    
+    override func didMove(to view: SKView) {
+        physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+        physicsWorld.contactDelegate = self
+        
+        // Setup boundary physics body
+        let frame = SKPhysicsBody(edgeLoopFrom: self.frame)
+        frame.friction = 0.2
+        frame.restitution = 0.2
+        self.physicsBody = frame
+        
+        backgroundColor = .black
+    }
+    
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        
+        // Create new sphere at touch location
+        let sphere = SKShapeNode(circleOfRadius: 25)
+        sphere.position = CGPoint(x: location.x, y: size.height - 50) // Start from top
+        sphere.fillColor = .blue
+        sphere.strokeColor = .white
+        
+        // Add physics body
+        sphere.physicsBody = SKPhysicsBody(circleOfRadius: 25)
+        sphere.physicsBody?.categoryBitMask = 1
+        sphere.physicsBody?.contactTestBitMask = 1
+        sphere.physicsBody?.collisionBitMask = 1
+        sphere.physicsBody?.restitution = 0.5
+        sphere.physicsBody?.friction = 0.2
+        sphere.physicsBody?.allowsRotation = true
+        
+        addChild(sphere)
+    }
+    
+    func didBegin(_ contact: SKPhysicsContact) {
+        guard let bodyA = contact.bodyA.node as? SKShapeNode,
+              let bodyB = contact.bodyB.node as? SKShapeNode else { return }
+        
+        // Basic merge check (same size spheres)
+        if bodyA.frame.width == bodyB.frame.width {
+            let newRadius = bodyA.frame.width * 0.75
+            bodyA.removeFromParent()
+            bodyB.removeFromParent()
+            
+            let mergedSphere = SKShapeNode(circleOfRadius: newRadius)
+            mergedSphere.position = contact.contactPoint
+            mergedSphere.fillColor = .purple
+            mergedSphere.strokeColor = .white
+            
+            mergedSphere.physicsBody = SKPhysicsBody(circleOfRadius: newRadius)
+            mergedSphere.physicsBody?.categoryBitMask = 1
+            mergedSphere.physicsBody?.contactTestBitMask = 1
+            mergedSphere.physicsBody?.collisionBitMask = 1
+            mergedSphere.physicsBody?.restitution = 0.5
+            mergedSphere.physicsBody?.friction = 0.2
+            
+            addChild(mergedSphere)
+            viewModel?.earnScore(points: 2)
+        }
+    }
+}
+
+struct SpriteKitContainer: UIViewRepresentable {
+    @ObservedObject var viewModel: GameViewModel
+    
+    func makeUIView(context: Context) -> SKView {
+        let view = SKView()
+        view.ignoresSiblingOrder = true
+        view.showsFPS = true
+        view.showsNodeCount = true
+        
+        let scene = GameScene(size: CGSize(width: 375, height: 650))
+        scene.scaleMode = .fill
+        scene.viewModel = viewModel
+        view.presentScene(scene)
+        
+        return view
+    }
+    
+    func updateUIView(_ view: SKView, context: Context) {
+        // Update if needed
+    }
+}
+#else
+struct SpriteKitContainer: View {
+    @ObservedObject var viewModel: GameViewModel
+    
+    var body: some View {
+        Text("SpriteKit not supported on this platform")
+    }
+}
+#endif
 
 #Preview {
     ContentView()
