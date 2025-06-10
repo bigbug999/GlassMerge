@@ -386,19 +386,30 @@ class GameViewModel: ObservableObject {
         print("Presenting level up choices at level \(level)")
         #endif
         var choices: [PowerUpChoice] = []
+        var seenPowerUpIds = Set<UUID>()
         
         // Get available new power-ups only if there are empty slots
         if hasEmptySlot {
             let newPowerUps = powerUpManager.powerUps
                 .filter { !$0.hasBeenOffered }
                 .map { PowerUpChoice.new($0) }
-            choices += newPowerUps
+            for choice in newPowerUps {
+                if !seenPowerUpIds.contains(choice.powerUp.id) {
+                    choices.append(choice)
+                    seenPowerUpIds.insert(choice.powerUp.id)
+                }
+            }
         }
         
         // Get upgradeable power-ups
         let upgradeablePowerUps = getUpgradeablePowerUps()
             .map { PowerUpChoice.upgrade($0) }
-        choices += upgradeablePowerUps
+        for choice in upgradeablePowerUps {
+            if !seenPowerUpIds.contains(choice.powerUp.id) {
+                choices.append(choice)
+                seenPowerUpIds.insert(choice.powerUp.id)
+            }
+        }
         
         // If no choices available, don't show the screen
         guard !choices.isEmpty else { return }
