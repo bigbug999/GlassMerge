@@ -90,33 +90,37 @@ struct PowerUpSave: Codable {
     let id: String // power-up name key
     var level: Int
     var slotIndex: Int
+    var isActive: Bool // Add isActive status
 }
 
 struct SphereState: Codable {
     var tier: Int
     var position: CGPoint
+    var activePowerUps: [String] // Store names of active power-ups on this sphere
     
     enum CodingKeys: String, CodingKey {
-        case tier, position, radius, color // Keep old keys for decoding compatibility
+        case tier, position, activePowerUps
     }
     
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(tier, forKey: .tier)
         try container.encode(["x": position.x, "y": position.y], forKey: .position)
+        try container.encode(activePowerUps, forKey: .activePowerUps)
     }
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        // If 'tier' exists, use it. Otherwise, default to 1 for old save data.
         self.tier = (try? container.decode(Int.self, forKey: .tier)) ?? 1
         let posDict = try container.decode([String: CGFloat].self, forKey: .position)
         self.position = CGPoint(x: posDict["x"] ?? 0, y: posDict["y"] ?? 0)
+        self.activePowerUps = (try? container.decode([String].self, forKey: .activePowerUps)) ?? []
     }
     
-    init(tier: Int, position: CGPoint) {
+    init(tier: Int, position: CGPoint, activePowerUps: [String] = []) {
         self.tier = tier
         self.position = position
+        self.activePowerUps = activePowerUps
     }
 }
 
@@ -335,6 +339,30 @@ class PowerUpManager: ObservableObject {
         unlockedFlaskSizes: Set(FlaskSize.allCases) // Unlock all flask sizes by default
     )
     
+    // Track which power-ups have been offered in this run
+    private var offeredPowerUps = Set<UUID>()
+    
+    // Reset offered power-ups (call this when starting a new run)
+    func resetOfferedPowerUps() {
+        offeredPowerUps.removeAll()
+        for i in powerUps.indices {
+            powerUps[i].hasBeenOffered = false
+        }
+    }
+    
+    // Mark a power-up as offered
+    func markAsOffered(_ powerUp: PowerUp) {
+        offeredPowerUps.insert(powerUp.id)
+        if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
+            powerUps[index].hasBeenOffered = true
+        }
+    }
+    
+    // Get available power-ups that haven't been offered yet
+    func getAvailablePowerUps() -> [PowerUp] {
+        return powerUps.filter { !offeredPowerUps.contains($0.id) }
+    }
+    
     // MARK: - Power-up Management
     
     func unlock(_ powerUp: PowerUp) -> Bool {
@@ -458,6 +486,7 @@ class GameViewModel: ObservableObject {
                     var instance = base
                     instance.level = save.level
                     instance.slotIndex = save.slotIndex
+                    instance.isActive = save.isActive // Restore active state
                     equippedPowerUps[slot] = instance
                 }
             }
@@ -488,9 +517,8 @@ class GameViewModel: ObservableObject {
         
         // Get available new power-ups only if there are empty slots
         if hasEmptySlot {
-            let newPowerUps = powerUpManager.powerUps
-                .filter { !$0.hasBeenOffered }
-                .map { PowerUpChoice.new($0) }
+            let availablePowerUps = powerUpManager.getAvailablePowerUps()
+            let newPowerUps = availablePowerUps.map { PowerUpChoice.new($0) }
             for choice in newPowerUps {
                 if !seenPowerUpIds.contains(choice.powerUp.id) {
                     choices.append(choice)
@@ -563,6 +591,7 @@ class GameViewModel: ObservableObject {
     func selectPowerUp(_ choice: PowerUpChoice) {
         switch choice {
         case .new(let powerUp):
+            powerUpManager.markAsOffered(powerUp)
             addNewPowerUp(powerUp)
         case .upgrade(let powerUp):
             upgradePowerUp(powerUp)
@@ -572,20 +601,53 @@ class GameViewModel: ObservableObject {
     }
     
     func activatePowerUp(_ powerUpToActivate: PowerUp) {
-        // Find the power up in the equipped list
+        // If this power-up is already active, just deactivate it
+        if let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }),
+           var powerUp = equippedPowerUps[index],
+           powerUp.isActive {
+            powerUp.isActive = false
+            #if DEBUG
+            print("\(powerUp.name) deactivated!")
+            #endif
+            
+            // update all slots for this power up
+            let idToUpdate = powerUp.id
+            for i in equippedPowerUps.indices {
+                if equippedPowerUps[i]?.id == idToUpdate {
+                    equippedPowerUps[i] = powerUp
+                }
+            }
+            return
+        }
+        
+        // Deactivate any currently active power-ups first
+        for i in equippedPowerUps.indices {
+            if var powerUp = equippedPowerUps[i], powerUp.isActive {
+                powerUp.isActive = false
+                #if DEBUG
+                print("\(powerUp.name) deactivated due to new activation!")
+                #endif
+                
+                // update all slots for this power up
+                let idToUpdate = powerUp.id
+                for j in equippedPowerUps.indices {
+                    if equippedPowerUps[j]?.id == idToUpdate {
+                        equippedPowerUps[j] = powerUp
+                    }
+                }
+            }
+        }
+        
+        // Now activate the new power-up
         guard let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }) else { return }
-        
-        // This is a struct, so we need to get a mutable copy.
         guard var powerUp = equippedPowerUps[index] else { return }
-
-        // Simple toggle behavior
-        powerUp.isActive = !powerUp.isActive
         
+        powerUp.isActive = true
         #if DEBUG
-        print("\(powerUp.name) \(powerUp.isActive ? "activated" : "deactivated")!")
+        print("\(powerUp.name) activated!")
         #endif
         
-        // update all slots for this power up because it's a value type
+        // update all slots for this power up
         let idToUpdate = powerUp.id
         for i in equippedPowerUps.indices {
             if equippedPowerUps[i]?.id == idToUpdate {
@@ -618,10 +680,11 @@ class GameViewModel: ObservableObject {
         
         guard let startIndex = instances.first else { return }
         
-        // Create upgraded version
+        // Create upgraded version, preserving active state
         var upgradedPowerUp = powerUp
         upgradedPowerUp.level += 1
         upgradedPowerUp.slotIndex = startIndex
+        upgradedPowerUp.isActive = powerUp.isActive // Preserve active state during upgrade
         
         // Clear all slots occupied by any instance of this power-up
         for index in instances {
@@ -687,7 +750,7 @@ class GameViewModel: ObservableObject {
         // Build RunState with equipped power-ups
         let equipped: [PowerUpSave?] = equippedPowerUps.enumerated().map { index, item in
             guard let item = item else { return nil }
-            return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index)
+            return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index, isActive: item.isActive)
         }
         let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates, selectedFlaskSize: selectedFlaskSize)
         
@@ -735,6 +798,7 @@ class GameViewModel: ObservableObject {
         isLevelUpViewPresented = false
         sphereStates = []
         selectedFlaskSize = .small
+        powerUpManager.resetOfferedPowerUps() // Reset offered power-ups when starting new game
     }
 }
 
@@ -1518,6 +1582,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var dangerStartTime: TimeInterval?
     private var gridNode: SKNode?
     
+    // Define power-up colors
+    private let powerUpColors: [String: SKColor] = [
+        "Super Massive Ball": SKColor(Color.blue),
+        "Negative Ball": SKColor(Color.red),
+        "Magnetic Ball": SKColor(Color.purple)
+    ]
+    
+    // Helper for checking active power-ups
+    private func hasActivePowerUp(_ name: String) -> Bool {
+        return viewModel?.equippedPowerUps.contains(where: { powerUp in
+            powerUp?.name == name && powerUp?.isActive == true
+        }) ?? false
+    }
+    
+    // Get the active power-up that should affect the current ball
+    private var currentActivePowerUp: (name: String, color: SKColor)? {
+        for (powerUpName, color) in powerUpColors {
+            if hasActivePowerUp(powerUpName) {
+                return (powerUpName, color)
+            }
+        }
+        return nil
+    }
+    
     // Grid configuration
     private let baseGridSpacing: CGFloat = 50 // Base spacing between grid lines
     private let gridLineWidth: CGFloat = 0.5
@@ -1591,7 +1679,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Restore spheres from saved state if available
         if let sphereStates = viewModel?.getSphereStates(), !sphereStates.isEmpty {
             for state in sphereStates {
-                if let sphere = createAndPlaceSphere(at: state.position, tier: state.tier) {
+                if let sphere = createAndPlaceSphere(at: state.position, tier: state.tier, activePowerUps: state.activePowerUps) {
                     // Make restored spheres immediately "live" for the danger zone
                     sphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
                 }
@@ -1790,15 +1878,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let sphere = SKShapeNode(circleOfRadius: scaledRadius)
         sphere.fillColor = tierInfo.color
         sphere.strokeColor = .white
+        sphere.lineWidth = 1
         sphere.name = "sphere"
-        sphere.userData = ["tier": tier]
+        sphere.userData = [
+            "tier": tier,
+            "activePowerUps": [String]()
+        ]
         
         return sphere
     }
     
-    func createAndPlaceSphere(at position: CGPoint, tier: Int) -> SKShapeNode? {
+    func createAndPlaceSphere(at position: CGPoint, tier: Int, activePowerUps: [String] = []) -> SKShapeNode? {
         guard let sphere = createSphereNode(tier: tier) else { return nil }
         sphere.position = position
+        
+        // Store active power-ups in userData
+        sphere.userData?["activePowerUps"] = activePowerUps
+        
+        // Apply visual effects based on active power-ups
+        if let powerUpName = activePowerUps.first, // For now, we'll only show one power-up effect
+           let color = powerUpColors[powerUpName] {
+            sphere.strokeColor = color
+            sphere.lineWidth = 3
+        }
+        
         addPhysics(to: sphere)
         addChild(sphere)
         return sphere
@@ -1842,6 +1945,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let constrainedPosition = constrainPosition(location, forSphere: sphereToDrop)
         sphereToDrop.position = constrainedPosition
         
+        // Apply any active power-ups to the sphere before dropping
+        if let activePowerUp = currentActivePowerUp {
+            var activePowerUps = sphereToDrop.userData?["activePowerUps"] as? [String] ?? []
+            activePowerUps.append(activePowerUp.name)
+            sphereToDrop.userData?["activePowerUps"] = activePowerUps
+        }
+        
         addPhysics(to: sphereToDrop)
         
         #if os(iOS)
@@ -1864,7 +1974,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             guard let sphere = node as? SKShapeNode,
                   sphere.name == "sphere",
                   let tier = sphere.userData?["tier"] as? Int else { return nil }
-            return SphereState(tier: tier, position: sphere.position)
+            
+            // Get active power-ups for this sphere
+            let activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
+            
+            return SphereState(
+                tier: tier,
+                position: sphere.position,
+                activePowerUps: activePowerUps
+            )
         }
         return states
     }
@@ -1905,6 +2023,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     override func update(_ currentTime: TimeInterval) {
+        // Update current sphere appearance if power-up state changes
+        if let currentSphere = currentSphere {
+            if let activePowerUp = currentActivePowerUp {
+                currentSphere.strokeColor = activePowerUp.color
+                currentSphere.lineWidth = 3
+            } else {
+                currentSphere.strokeColor = .white
+                currentSphere.lineWidth = 1
+            }
+        }
+        
         // Cleanup stale bodies from danger zone set
         spheresInDangerZone = spheresInDangerZone.filter { $0.node != nil }
         
