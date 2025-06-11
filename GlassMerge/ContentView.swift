@@ -1007,14 +1007,6 @@ struct GameView: View {
                 
                 GameOverView(
                     score: viewModel.score,
-                    onRestart: {
-                        isGameOver = false
-                        currentScreen = .mainMenu
-                        // Use a slight delay to ensure we're on the main menu before starting new game
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            currentScreen = .game
-                        }
-                    },
                     onMainMenu: {
                         currentScreen = .mainMenu
                     }
@@ -1380,7 +1372,6 @@ struct PowerUpChoiceCard: View {
 
 struct GameOverView: View {
     let score: Int
-    let onRestart: () -> Void
     let onMainMenu: () -> Void
     
     var body: some View {
@@ -1394,15 +1385,6 @@ struct GameOverView: View {
                 .font(.title2)
                 .foregroundColor(.white)
                 .padding(.bottom, 20)
-            
-            Button(action: onRestart) {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Restart")
-                }
-                .frame(width: 200)
-            }
-            .buttonStyle(.borderedProminent)
             
             Button(action: onMainMenu) {
                 HStack {
@@ -1715,8 +1697,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         let spawnY = size.height - topBufferHeight
-        let spawnPosition = position ?? CGPoint(x: size.width / 2, y: spawnY)
-        sphere.position = spawnPosition
+        let initialPosition = position ?? CGPoint(x: size.width / 2, y: spawnY)
+        sphere.position = initialPosition
         addChild(sphere)
         
         if animated {
@@ -1726,10 +1708,31 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             
             sphere.run(scaleAction) { [weak self] in
                 self?.currentSphere = sphere
+                
+                // After scaling, check if we need to adjust position
+                if let radius = sphere.path?.boundingBox.width.half,
+                   let frameWidth = self?.frame.width {
+                    let currentX = sphere.position.x
+                    let constrainedX = min(max(radius, currentX), frameWidth - radius)
+                    
+                    if currentX != constrainedX {
+                        let moveAction = SKAction.moveTo(x: constrainedX, duration: 0.2)
+                        moveAction.timingMode = .easeInEaseOut
+                        sphere.run(moveAction)
+                    }
+                }
+                
                 self?.isTransitioning = false
             }
         } else {
             self.currentSphere = sphere
+            
+            // Immediately adjust position if needed
+            if let radius = sphere.path?.boundingBox.width.half {
+                let currentX = sphere.position.x
+                let constrainedX = min(max(radius, currentX), frame.width - radius)
+                sphere.position = CGPoint(x: constrainedX, y: spawnY)
+            }
         }
     }
     
@@ -1757,16 +1760,28 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return sphere
     }
 
+    private func constrainPosition(_ position: CGPoint, forSphere sphere: SKShapeNode) -> CGPoint {
+        guard let radius = sphere.path?.boundingBox.width.half else { return position }
+        
+        // Ensure the ball stays within bounds horizontally
+        let constrainedX = min(max(radius, position.x), frame.width - radius)
+        
+        return CGPoint(
+            x: constrainedX,
+            y: size.height - topBufferHeight
+        )
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard !isPaused, !isTransitioning, let touch = touches.first, let sphere = currentSphere else { return }
         let location = touch.location(in: self)
-        sphere.position.x = location.x
+        sphere.position = constrainPosition(location, forSphere: sphere)
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard !isPaused, !isTransitioning, let touch = touches.first, let sphere = currentSphere else { return }
         let location = touch.location(in: self)
-        sphere.position.x = location.x
+        sphere.position = constrainPosition(location, forSphere: sphere)
     }
     
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -1775,7 +1790,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isTransitioning = true
         
         let location = touch.location(in: self)
-        sphereToDrop.position.x = location.x
+        let constrainedPosition = constrainPosition(location, forSphere: sphereToDrop)
+        sphereToDrop.position = constrainedPosition
         
         addPhysics(to: sphereToDrop)
         
@@ -1785,8 +1801,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         self.currentSphere = nil
         
-        let spawnY = size.height - topBufferHeight
-        let spawnPosition = CGPoint(x: location.x, y: spawnY)
+        // Use the same constrained x position for spawning the next sphere
+        let spawnPosition = constrainedPosition
         
         // Use a slight delay to allow the dropped sphere to start falling before the next appears.
         run(SKAction.wait(forDuration: 0.1)) { [weak self] in
@@ -2019,6 +2035,11 @@ struct SpriteKitContainer: View {
     }
 }
 #endif
+
+// Add CGFloat extension for convenience
+extension CGFloat {
+    var half: CGFloat { self / 2.0 }
+}
 
 #Preview {
     ContentView()
