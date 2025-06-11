@@ -14,6 +14,45 @@ import CoreHaptics
 #endif
 
 // MARK: - SAVE SYSTEM (embedded)
+
+enum FlaskSize: String, Codable, CaseIterable {
+    case small
+    case medium
+    case large
+    
+    var displayName: String {
+        switch self {
+        case .small: return "Small (Basic)"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .small: return "Base flask size with standard balls"
+        case .medium: return "75% ball scale, up to 60 balls"
+        case .large: return "50% ball scale, up to 120 balls"
+        }
+    }
+    
+    var cost: Int {
+        switch self {
+        case .small: return 0
+        case .medium: return 1000
+        case .large: return 10000
+        }
+    }
+    
+    var ballScale: CGFloat {
+        switch self {
+        case .small: return 1.0
+        case .medium: return 0.75
+        case .large: return 0.5
+        }
+    }
+}
+
 struct GameState: Codable {
     var schemaVersion: Int = 1
     var progression: Progression
@@ -29,6 +68,7 @@ struct MetaState: Codable {
 struct Progression: Codable {
     var currency: Int
     var powerUps: [PowerUpProgress]
+    var unlockedFlaskSizes: Set<FlaskSize> = [.small]  // Small is always unlocked
 }
 
 struct PowerUpProgress: Codable {
@@ -43,6 +83,7 @@ struct RunState: Codable {
     var xp: Int
     var equipped: [PowerUpSave?]
     var spheres: [SphereState]
+    var selectedFlaskSize: FlaskSize = .small
 }
 
 struct PowerUpSave: Codable {
@@ -286,14 +327,20 @@ class PowerUpManager: ObservableObject {
         )
     ]
     
-    // Game currency
+    // Game currency and progression
     @Published var currency: Int = 0
+    @Published var progression = Progression(
+        currency: 0,
+        powerUps: [],
+        unlockedFlaskSizes: Set(FlaskSize.allCases) // Unlock all flask sizes by default
+    )
     
     // MARK: - Power-up Management
     
     func unlock(_ powerUp: PowerUp) -> Bool {
         guard !powerUp.isUnlocked && currency >= powerUp.cost else { return false }
         currency -= powerUp.cost
+        progression.currency = currency
         if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
             powerUps[index].isUnlocked = true
             return true
@@ -301,9 +348,18 @@ class PowerUpManager: ObservableObject {
         return false
     }
     
+    func unlockFlaskSize(_ size: FlaskSize) -> Bool {
+        guard !progression.unlockedFlaskSizes.contains(size) && currency >= size.cost else { return false }
+        currency -= size.cost
+        progression.currency = currency
+        progression.unlockedFlaskSizes.insert(size)
+        return true
+    }
+    
     func upgrade(_ powerUp: PowerUp) -> Bool {
         guard powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && currency >= powerUp.upgradeCost else { return false }
         currency -= powerUp.upgradeCost
+        progression.currency = currency
         if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
             powerUps[index].level += 1
             return true
@@ -340,6 +396,7 @@ class GameViewModel: ObservableObject {
     @Published var xp: Int = 0
     @Published var level: Int = 1
     @Published var isGamePaused: Bool = false
+    @Published var selectedFlaskSize: FlaskSize = .small
     let xpNeededPerLevel: Int = 30
     let powerUpManager: PowerUpManager
     @Published private var sphereStates: [SphereState] = []
@@ -382,6 +439,7 @@ class GameViewModel: ObservableObject {
     private func applyGameState(_ state: GameState) {
         // Restore progression
         powerUpManager.currency = state.progression.currency
+        powerUpManager.progression = state.progression
 
         // Restore power-up progression
         for progress in state.progression.powerUps {
@@ -407,6 +465,7 @@ class GameViewModel: ObservableObject {
             self.xp = run.xp
             self.level = run.level
             self.sphereStates = run.spheres
+            self.selectedFlaskSize = run.selectedFlaskSize
             #if DEBUG
             print("GameViewModel: Restored \(run.spheres.count) sphere states from save")
             #endif
@@ -600,14 +659,14 @@ class GameViewModel: ObservableObject {
         let progressEntries = powerUpManager.powerUps.map { powerUp in
             PowerUpProgress(id: powerUp.name, isUnlocked: powerUp.isUnlocked, level: powerUp.level)
         }
-        let progression = Progression(currency: powerUpManager.currency, powerUps: progressEntries)
+        let progression = Progression(currency: powerUpManager.currency, powerUps: progressEntries, unlockedFlaskSizes: powerUpManager.progression.unlockedFlaskSizes)
         
         // Build RunState with equipped power-ups
         let equipped: [PowerUpSave?] = equippedPowerUps.enumerated().map { index, item in
             guard let item = item else { return nil }
             return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index)
         }
-        let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates)
+        let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates, selectedFlaskSize: selectedFlaskSize)
         
         return GameState(progression: progression, run: run, meta: MetaState())
     }
@@ -652,6 +711,7 @@ class GameViewModel: ObservableObject {
         hasReroll = true
         isLevelUpViewPresented = false
         sphereStates = []
+        selectedFlaskSize = .small
     }
 }
 
@@ -665,6 +725,7 @@ struct ContentView: View {
         case upgradeShop
         case collection
         case settings
+        case runSetup
     }
     
     var body: some View {
@@ -685,6 +746,10 @@ struct ContentView: View {
                     CollectionView(currentScreen: $currentScreen)
                 case .settings:
                     SettingsView(currentScreen: $currentScreen)
+                case .runSetup:
+                    RunSetupView(currentScreen: $currentScreen, onGameStart: { state in
+                        loadedState = state
+                    })
                 }
             }
             .navigationBarBackButtonHidden(true)
@@ -708,7 +773,7 @@ struct MainMenuView: View {
             VStack(spacing: 15) {
                 Button("New Game") {
                     onNewGame?()
-                    currentScreen = .game
+                    currentScreen = .runSetup
                 }
                 .buttonStyle(.borderedProminent)
                 
@@ -739,6 +804,127 @@ struct MainMenuView: View {
         .onAppear {
             hasSave = SaveManager.shared.load()?.run != nil
         }
+    }
+}
+
+struct RunSetupView: View {
+    @Binding var currentScreen: ContentView.GameScreen
+    @StateObject private var powerUpManager = PowerUpManager()
+    @State private var selectedFlaskSize: FlaskSize = .small
+    let onGameStart: (GameState) -> Void
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            HStack {
+                Button(action: {
+                    currentScreen = .mainMenu
+                }) {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
+                }
+                .padding()
+                Spacer()
+            }
+            
+            Text("Run Setup")
+                .font(.title)
+                .padding(.bottom)
+            
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Flask Size")
+                    .font(.headline)
+                
+                ForEach(FlaskSize.allCases, id: \.self) { size in
+                    FlaskSizeOption(
+                        flaskSize: size,
+                        isSelected: selectedFlaskSize == size,
+                        isUnlocked: size == .small || powerUpManager.progression.unlockedFlaskSizes.contains(size),
+                        onSelect: {
+                            selectedFlaskSize = size
+                        }
+                    )
+                }
+            }
+            .padding()
+            
+            Spacer()
+            
+            Button("Start Game") {
+                // Create initial game state
+                let progression = Progression(
+                    currency: powerUpManager.currency,
+                    powerUps: powerUpManager.powerUps.map { PowerUpProgress(id: $0.name, isUnlocked: $0.isUnlocked, level: $0.level) },
+                    unlockedFlaskSizes: powerUpManager.progression.unlockedFlaskSizes
+                )
+                
+                let run = RunState(
+                    score: 0,
+                    level: 1,
+                    xp: 0,
+                    equipped: Array(repeating: nil, count: 6),
+                    spheres: [],
+                    selectedFlaskSize: selectedFlaskSize
+                )
+                
+                let gameState = GameState(
+                    progression: progression,
+                    run: run,
+                    meta: MetaState()
+                )
+                
+                onGameStart(gameState)
+                currentScreen = .game
+            }
+            .buttonStyle(.borderedProminent)
+            .padding()
+        }
+    }
+}
+
+struct FlaskSizeOption: View {
+    let flaskSize: FlaskSize
+    let isSelected: Bool
+    let isUnlocked: Bool
+    let onSelect: () -> Void
+    
+    var body: some View {
+        Button(action: {
+            if isUnlocked {
+                onSelect()
+            }
+        }) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(flaskSize.displayName)
+                        .font(.headline)
+                    Text(flaskSize.description)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                
+                Spacer()
+                
+                if !isUnlocked {
+                    HStack {
+                        Image(systemName: "lock.fill")
+                        Text("\(flaskSize.cost)")
+                    }
+                    .foregroundColor(.gray)
+                }
+                
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.blue)
+                }
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(white: isSelected ? 0.2 : 0.15))
+            )
+        }
+        .buttonStyle(.plain)
+        .opacity(isUnlocked ? 1 : 0.6)
     }
 }
 
@@ -788,9 +974,14 @@ struct GameView: View {
                         .stroke(Color.gray.opacity(0.3), lineWidth: 2)
                         .frame(width: 375, height: 650)
                     
+                    #if os(iOS)
                     SpriteKitContainer(viewModel: viewModel, isGameOver: $isGameOver)
                         .frame(width: 375, height: 650)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+                    #else
+                    Text("SpriteKit not supported on this platform")
+                        .frame(width: 375, height: 650)
+                    #endif
                 }
                 
                 Spacer()
@@ -1279,6 +1470,11 @@ struct SpriteKitContainer: UIViewRepresentable {
         if let scene = context.coordinator.scene {
             scene.viewModel = viewModel
             scene.isPaused = viewModel.isGamePaused || viewModel.isLevelUpViewPresented
+            
+            // Update grid and ball sizes when flask size changes
+            if scene.viewModel?.selectedFlaskSize != viewModel.selectedFlaskSize {
+                scene.updateFlaskSize()
+            }
         }
     }
 }
@@ -1294,8 +1490,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let dangerGracePeriod: TimeInterval = 3.0
     private let gameOverThreshold: TimeInterval = 5.0
     private var dangerStartTime: TimeInterval?
+    private var gridNode: SKNode?
+    
+    // Grid configuration
+    private let baseGridSpacing: CGFloat = 50 // Base spacing between grid lines
+    private let gridLineWidth: CGFloat = 0.5
+    private let gridLineColor = SKColor(white: 0.3, alpha: 0.3)
+    private let gridDotRadius: CGFloat = 1.5
+    private let gridDotColor = SKColor(white: 0.4, alpha: 0.4)
     
     var onGameOver: (() -> Void)?
+    
+    struct PhysicsCategory {
+        static let none: UInt32 = 0
+        static let sphere: UInt32 = 0x1 << 0
+        static let wall: UInt32 = 0x1 << 1
+        static let dangerZone: UInt32 = 0x1 << 2
+    }
+    
+    private var scheduledForMerge = Set<SKShapeNode>()
     
     struct TierInfo {
         let radius: CGFloat
@@ -1321,14 +1534,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     let maxTier = tierData.count
     
-    struct PhysicsCategory {
-        static let none: UInt32 = 0
-        static let sphere: UInt32 = 0x1 << 0
-        static let wall: UInt32 = 0x1 << 1
-        static let dangerZone: UInt32 = 0x1 << 2
+    private var currentFlaskSize: FlaskSize {
+        viewModel?.selectedFlaskSize ?? .small
     }
     
-    private var scheduledForMerge = Set<SKShapeNode>()
+    private var ballScale: CGFloat {
+        currentFlaskSize.ballScale
+    }
+    
+    private var gridSpacing: CGFloat {
+        baseGridSpacing * ballScale
+    }
     
     override func didMove(to view: SKView) {
         physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
@@ -1343,6 +1559,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         backgroundColor = .black
         
+        setupGrid()
         setupDangerZone()
         
         // Restore spheres from saved state if available
@@ -1356,6 +1573,109 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         spawnNewSphere(at: nil, animated: false)
+    }
+    
+    private func setupGrid() {
+        // Remove existing grid if any
+        gridNode?.removeFromParent()
+        
+        // Create a container node for the grid
+        let container = SKNode()
+        
+        // Calculate number of lines needed
+        let horizontalLines = Int(frame.height / gridSpacing)
+        let verticalLines = Int(frame.width / gridSpacing)
+        
+        // Create horizontal lines
+        for i in 0...horizontalLines {
+            let y = CGFloat(i) * gridSpacing
+            let line = SKShapeNode()
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: frame.width, y: y))
+            line.path = path
+            line.strokeColor = gridLineColor
+            line.lineWidth = gridLineWidth
+            container.addChild(line)
+        }
+        
+        // Create vertical lines
+        for i in 0...verticalLines {
+            let x = CGFloat(i) * gridSpacing
+            let line = SKShapeNode()
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: x, y: 0))
+            path.addLine(to: CGPoint(x: x, y: frame.height))
+            line.path = path
+            line.strokeColor = gridLineColor
+            line.lineWidth = gridLineWidth
+            container.addChild(line)
+        }
+        
+        // Add dots at intersections
+        for i in 0...horizontalLines {
+            for j in 0...verticalLines {
+                let x = CGFloat(j) * gridSpacing
+                let y = CGFloat(i) * gridSpacing
+                let dot = SKShapeNode(circleOfRadius: gridDotRadius)
+                dot.position = CGPoint(x: x, y: y)
+                dot.fillColor = gridDotColor
+                dot.strokeColor = .clear
+                container.addChild(dot)
+            }
+        }
+        
+        // Add the grid container to the scene
+        gridNode = container
+        addChild(container)
+        
+        // Move grid to back
+        container.zPosition = -1
+    }
+    
+    func updateGrid() {
+        setupGrid() // Recreate grid with new spacing
+    }
+    
+    // Update the SpriteKitContainer to handle flask size changes
+    func updateFlaskSize() {
+        updateGrid()
+        // Rescale existing spheres
+        enumerateChildNodes(withName: "sphere") { node, _ in
+            guard let sphere = node as? SKShapeNode,
+                  let tier = sphere.userData?["tier"] as? Int else { return }
+            
+            let tierIndex = tier - 1
+            let tierInfo = GameScene.tierData[tierIndex]
+            let scaledRadius = tierInfo.radius * self.ballScale
+            
+            // Create new path with scaled radius
+            sphere.path = CGPath(ellipseIn: CGRect(x: -scaledRadius, y: -scaledRadius,
+                                                  width: scaledRadius * 2, height: scaledRadius * 2),
+                               transform: nil)
+            
+            // Update physics body
+            if let body = sphere.physicsBody {
+                let newBody = SKPhysicsBody(circleOfRadius: scaledRadius)
+                newBody.categoryBitMask = body.categoryBitMask
+                newBody.contactTestBitMask = body.contactTestBitMask
+                newBody.collisionBitMask = body.collisionBitMask
+                newBody.restitution = body.restitution
+                newBody.friction = body.friction
+                newBody.allowsRotation = body.allowsRotation
+                newBody.linearDamping = body.linearDamping
+                newBody.angularDamping = body.angularDamping
+                newBody.velocity = body.velocity
+                newBody.angularVelocity = body.angularVelocity
+                
+                let maxTierMass: CGFloat = 12
+                let baseMass: CGFloat = 10.0
+                let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
+                newBody.mass = baseMass * massMultiplier * self.ballScale
+                
+                sphere.physicsBody = newBody
+            }
+        }
     }
     
     func setupDangerZone() {
@@ -1418,8 +1738,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         let tierIndex = tier - 1
         let tierInfo = GameScene.tierData[tierIndex]
+        let scaledRadius = tierInfo.radius * ballScale
         
-        let sphere = SKShapeNode(circleOfRadius: tierInfo.radius)
+        let sphere = SKShapeNode(circleOfRadius: scaledRadius)
         sphere.fillColor = tierInfo.color
         sphere.strokeColor = .white
         sphere.name = "sphere"
@@ -1602,7 +1923,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let maxTierMass: CGFloat = 12
         let baseMass: CGFloat = 10.0
         let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
-        body.mass = baseMass * massMultiplier
+        body.mass = baseMass * massMultiplier * ballScale // Scale mass with ball size
         
         sphere.physicsBody = body
         
