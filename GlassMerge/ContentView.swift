@@ -571,6 +571,29 @@ class GameViewModel: ObservableObject {
         saveGameState() // Save after applying choice
     }
     
+    func activatePowerUp(_ powerUpToActivate: PowerUp) {
+        // Find the power up in the equipped list
+        guard let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }) else { return }
+        
+        // This is a struct, so we need to get a mutable copy.
+        guard var powerUp = equippedPowerUps[index] else { return }
+
+        // Simple toggle behavior
+        powerUp.isActive = !powerUp.isActive
+        
+        #if DEBUG
+        print("\(powerUp.name) \(powerUp.isActive ? "activated" : "deactivated")!")
+        #endif
+        
+        // update all slots for this power up because it's a value type
+        let idToUpdate = powerUp.id
+        for i in equippedPowerUps.indices {
+            if equippedPowerUps[i]?.id == idToUpdate {
+                equippedPowerUps[i] = powerUp
+            }
+        }
+    }
+    
     private func addNewPowerUp(_ powerUp: PowerUp) {
         var newPowerUp = powerUp
         newPowerUp.hasBeenOffered = true
@@ -988,7 +1011,7 @@ struct GameView: View {
                 
                 Spacer()
                 
-                PowerUpSlotView(powerUps: $viewModel.equippedPowerUps)
+                PowerUpSlotView(powerUps: $viewModel.equippedPowerUps, onActivate: viewModel.activatePowerUp)
                     .padding(.bottom)
             }
             
@@ -1045,6 +1068,7 @@ struct GameView: View {
 
 struct PowerUpSlotView: View {
     @Binding var powerUps: [PowerUp?]
+    let onActivate: (PowerUp) -> Void
     let slotSize: CGFloat = 50
     let spacing: CGFloat = 12
     
@@ -1059,6 +1083,11 @@ struct PowerUpSlotView: View {
                         totalSlots: slotsForPowerUp(at: index)
                     )
                     .frame(width: calculateSlotWidth(for: index))
+                    .onTapGesture {
+                        if let powerUp = powerUps[index] {
+                            onActivate(powerUp)
+                        }
+                    }
                 }
             }
         }
@@ -1111,7 +1140,7 @@ struct PowerUpSlot: View {
     var body: some View {
         GeometryReader { geometry in
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                .stroke(powerUp?.isActive == true ? .blue : Color.gray.opacity(0.3), lineWidth: 2)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color.gray.opacity(0.1))
