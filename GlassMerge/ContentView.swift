@@ -934,6 +934,8 @@ struct GameView: View {
     @StateObject private var viewModel: GameViewModel
     @State private var isPaused: Bool = false
     @State private var isGameOver: Bool = false
+    // Add auto-save timer
+    private let autoSaveTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     
     init(currentScreen: Binding<ContentView.GameScreen>, restore state: GameState? = nil) {
         self._currentScreen = currentScreen
@@ -1024,6 +1026,19 @@ struct GameView: View {
         }
         .onChange(of: viewModel.isLevelUpViewPresented) { _, _ in
             // Physics will pause automatically due to updateUIView
+        }
+        // Add auto-save timer subscription
+        .onReceive(autoSaveTimer) { _ in
+            if !isPaused && !isGameOver && !viewModel.isLevelUpViewPresented {
+                #if DEBUG
+                print("[AutoSave] Saving game state...")
+                #endif
+                viewModel.saveGameState()
+            }
+        }
+        // Cancel timer when view disappears
+        .onDisappear {
+            autoSaveTimer.upstream.connect().cancel()
         }
     }
 }
