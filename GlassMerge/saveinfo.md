@@ -21,7 +21,8 @@ _Last updated: 2025-06-11_
 * `RunState`
   * `score`, `level`, `xp` – current run stats (expandable)
   * `equipped : [PowerUpSave?]` – fixed-length (6) array representing each slot; `nil` = empty
-  * `spheres: [SphereState]` - snapshot of all spheres in the play area.
+  * `spheres: [SphereState]` - snapshot of all spheres in the play area with their active power-ups
+  * Note: Only one power-up can be active at a time across all equipped slots
 
 * `PowerUpProgress`
   * `id : String` – **power-up name** (stable key)
@@ -31,6 +32,13 @@ _Last updated: 2025-06-11_
   * `id : String` – power-up name
   * `level` – per-run level (mirrors permanent level at save time)
   * `slotIndex` – first slot the power-up occupies (multi-slot awareness)
+  * `isActive` – whether the power-up is currently active (only one can be true at a time)
+
+* `SphereState`
+  * `tier` – sphere's current tier
+  * `position` – sphere's current position
+  * `activePowerUps` – array of power-up names currently affecting this sphere
+  * Note: Currently only stores one power-up name as only one can be active
 
 * `MetaState` – currently `firstLaunchDate`, `totalPlayTime`; free to extend.
 

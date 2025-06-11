@@ -76,13 +76,12 @@
 1. **Power-Up Categories and Abilities**
    - **Gravity**
      - Super Massive Ball
-       - Activation makes selected ball super dense
+       - Activation makes spawned ball super dense
        - Applies strong downward impulse on release
        - Useful for breaking up clusters
      - Low Gravity Environment
        - Modifies physics world gravity
        - Affects all balls in play area
-       - Enables floating combinations
    
    - **Magnetism**
      - Magnetic Ball
@@ -105,7 +104,7 @@
        - User-controlled removal tool
 
    - **Friction**
-     - Repellant Environment
+     - Bouncy Environment
        - Increases restitution globally
        - Makes balls extra bouncy
        - Creates more dynamic gameplay

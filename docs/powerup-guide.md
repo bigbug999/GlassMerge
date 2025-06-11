@@ -6,8 +6,15 @@
 - Power-ups can be equipped in slots at the bottom of the game screen
 - Each power-up can occupy 1-3 slots based on its level
 - Power-ups can be toggled on/off by tapping
-- Active power-ups are indicated with a blue border
+- Only one power-up can be active at a time
+- Active power-ups are indicated with colored borders:
+  - Super Massive Ball: Blue
+  - Negative Ball: Red
+  - Magnetic Ball: Purple
 - Debug logging tracks activation/deactivation states
+- Power-up states persist across game saves
+- Active power-ups are tracked per-sphere
+- Level-up system prevents duplicate power-up offerings
 
 ### Power-Up Structure
 ```swift
@@ -31,11 +38,13 @@ struct PowerUp {
 
 ### 1. Gravity Category
 #### Super Massive Ball
-- **Status**: Not Implemented
-- **Implementation Plan**:
+- **Status**: Partially Implemented
+- **Implementation Progress**:
+  - [x] Add visual indicator for affected ball (blue stroke)
+  - [x] Implement power-up state persistence
+  - [x] Implement single active power-up system
   - [ ] Modify ball physics properties when power-up is active
   - [ ] Increase mass and downward force on release
-  - [ ] Add visual indicator for affected ball
   - [ ] Add screen shake on impact
 
 #### Low Gravity Environment
@@ -46,17 +55,23 @@ struct PowerUp {
   - [ ] Smooth transition between gravity states
 
 ### 2. Magnetism Category
-#### Magnetic Ball & Repulsion Field
-- **Status**: Not Implemented
-- **Implementation Plan**:
-  - [ ] Implement attraction/repulsion forces
+#### Magnetic Ball
+- **Status**: Partially Implemented
+- **Implementation Progress**:
+  - [x] Add visual indicator for affected ball (purple stroke)
+  - [x] Implement power-up state persistence
+  - [x] Implement single active power-up system
+  - [ ] Implement attraction forces
   - [ ] Add magnetic field visualization
   - [ ] Handle multi-ball interactions
 
 ### 3. Void Category
-#### Negative Ball & Selective Deletion
-- **Status**: Not Implemented
-- **Implementation Plan**:
+#### Negative Ball
+- **Status**: Partially Implemented
+- **Implementation Progress**:
+  - [x] Add visual indicator for affected ball (red stroke)
+  - [x] Implement power-up state persistence
+  - [x] Implement single active power-up system
   - [ ] Implement ball removal mechanics
   - [ ] Add deletion animations
   - [ ] Handle scoring for removed balls
