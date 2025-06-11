@@ -388,87 +388,67 @@ class PowerUpManager: ObservableObject {
 }
 
 class GameViewModel: ObservableObject {
-    @Published var equippedPowerUps: [PowerUp?] = Array(repeating: nil, count: 6)
-    @Published var isLevelUpViewPresented = false
-    @Published var powerUpChoices: [PowerUpChoice] = []
-    @Published var hasReroll: Bool = true
-    @Published var score: Int = 0
-    @Published var xp: Int = 0
-    @Published var level: Int = 1
-    @Published var isGamePaused: Bool = false
-    @Published var selectedFlaskSize: FlaskSize = .small
+    @Published var equippedPowerUps: [PowerUp?]
+    @Published var isLevelUpViewPresented: Bool
+    @Published var powerUpChoices: [PowerUpChoice]
+    @Published var hasReroll: Bool
+    @Published var score: Int
+    @Published var xp: Int
+    @Published var level: Int
+    @Published var isGamePaused: Bool
+    @Published var selectedFlaskSize: FlaskSize
     let xpNeededPerLevel: Int = 30
     let powerUpManager: PowerUpManager
-    @Published private var sphereStates: [SphereState] = []
+    @Published private var sphereStates: [SphereState]
     var sphereStateProvider: (() -> [SphereState])?
-    
-    // Define a type to represent either a new power-up or an upgrade
-    enum PowerUpChoice: Identifiable {
-        case new(PowerUp)
-        case upgrade(PowerUp)
-        
-        var id: UUID {
-            switch self {
-            case .new(let powerUp), .upgrade(let powerUp):
-                return powerUp.id
-            }
-        }
-        
-        var powerUp: PowerUp {
-            switch self {
-            case .new(let powerUp), .upgrade(let powerUp):
-                return powerUp
-            }
-        }
-        
-        var isUpgrade: Bool {
-            switch self {
-            case .new: return false
-            case .upgrade: return true
-            }
-        }
-    }
     
     init(powerUpManager: PowerUpManager, restore state: GameState? = nil) {
         self.powerUpManager = powerUpManager
+        
+        // Initialize with default values first
+        self.equippedPowerUps = Array(repeating: nil, count: 6)
+        self.isLevelUpViewPresented = false
+        self.powerUpChoices = []
+        self.hasReroll = true
+        self.score = 0
+        self.xp = 0
+        self.level = 1
+        self.isGamePaused = false
+        self.selectedFlaskSize = .small
+        self.sphereStates = []
+        
+        // Then apply saved state if available
         if let state = state {
-            self.applyGameState(state)
-        }
-    }
-    
-    private func applyGameState(_ state: GameState) {
-        // Restore progression
-        powerUpManager.currency = state.progression.currency
-        powerUpManager.progression = state.progression
+            // Restore progression
+            powerUpManager.currency = state.progression.currency
+            powerUpManager.progression = state.progression
 
-        // Restore power-up progression
-        for progress in state.progression.powerUps {
-            if let index = powerUpManager.powerUps.firstIndex(where: { $0.name == progress.id }) {
-                powerUpManager.powerUps[index].isUnlocked = progress.isUnlocked
-                powerUpManager.powerUps[index].level = progress.level
-            }
-        }
-
-        // Restore equipped power-ups and run state
-        if let run = state.run {
-            equippedPowerUps = Array(repeating: nil, count: 6)
-            for (slot, save) in run.equipped.enumerated() {
-                guard let save = save else { continue }
-                if let base = powerUpManager.powerUps.first(where: { $0.name == save.id }) {
-                    var instance = base
-                    instance.level = save.level
-                    instance.slotIndex = save.slotIndex
-                    equippedPowerUps[slot] = instance
+            // Restore power-up progression
+            for progress in state.progression.powerUps {
+                if let index = powerUpManager.powerUps.firstIndex(where: { $0.name == progress.id }) {
+                    powerUpManager.powerUps[index].isUnlocked = progress.isUnlocked
+                    powerUpManager.powerUps[index].level = progress.level
                 }
             }
-            self.score = run.score
-            self.xp = run.xp
-            self.level = run.level
-            self.sphereStates = run.spheres
-            self.selectedFlaskSize = run.selectedFlaskSize
-            #if DEBUG
-            print("GameViewModel: Restored \(run.spheres.count) sphere states from save")
-            #endif
+
+            // Restore run state if available
+            if let run = state.run {
+                self.equippedPowerUps = Array(repeating: nil, count: 6)
+                for (slot, save) in run.equipped.enumerated() {
+                    if let save = save,
+                       let base = powerUpManager.powerUps.first(where: { $0.name == save.id }) {
+                        var instance = base
+                        instance.level = save.level
+                        instance.slotIndex = save.slotIndex
+                        self.equippedPowerUps[slot] = instance
+                    }
+                }
+                self.score = run.score
+                self.xp = run.xp
+                self.level = run.level
+                self.sphereStates = run.spheres
+                self.selectedFlaskSize = run.selectedFlaskSize
+            }
         }
     }
     
@@ -1016,13 +996,13 @@ struct GameView: View {
         .sheet(isPresented: $viewModel.isLevelUpViewPresented) {
             LevelUpView(viewModel: viewModel)
         }
-        .onChange(of: isPaused) { newValue in
+        .onChange(of: isPaused) { oldValue, newValue in
             viewModel.isGamePaused = newValue
             if newValue {
                 viewModel.saveGameState()
             }
         }
-        .onChange(of: viewModel.isLevelUpViewPresented) { newValue in
+        .onChange(of: viewModel.isLevelUpViewPresented) { oldValue, newValue in
             // Physics will pause automatically due to updateUIView
         }
     }
@@ -1051,7 +1031,7 @@ struct PowerUpSlotView: View {
     
     private func shouldDrawSlot(at index: Int) -> Bool {
         // Only draw if this is the first slot of a power-up or an empty slot
-        if let powerUp = powerUps[index] {
+        if powerUps[index] != nil {
             return isFirstSlotOfPowerUp(index)
         }
         return true // Empty slots always draw
