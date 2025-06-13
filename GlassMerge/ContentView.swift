@@ -194,12 +194,13 @@ enum PowerUpType: String, Codable {
 struct PowerUpStats {
     var duration: TimeInterval?  // nil for single-use effects
     var forceMagnitude: Double
+    var massMultiplier: Double = 1.0  // New: Multiplier for physics mass
     
     static func baseStats(for powerUp: PowerUp) -> PowerUpStats {
         switch powerUp.name {
         // Single-use power-ups (no duration)
         case "Super Massive Ball":
-            return PowerUpStats(duration: nil, forceMagnitude: 1.5)
+            return PowerUpStats(duration: nil, forceMagnitude: 0.75, massMultiplier: 2.0)  // Level 1 base stats (50% of previous)
         case "Magnetic Ball":
             return PowerUpStats(duration: nil, forceMagnitude: 0.5)
         case "Negative Ball":
@@ -230,9 +231,29 @@ struct PowerUpStats {
             stats.duration = duration + (Double(level - 1) * 2)
         }
         
-        // Force magnitude scaling based on power-up type
-        let forceMagnitudeIncrease = Double(level - 1) * 0.25
-        stats.forceMagnitude += forceMagnitudeIncrease
+        // Special scaling for Super Massive Ball
+        if stats.massMultiplier > 1.0 {  // This identifies Super Massive Ball
+            switch level {
+            case 1:
+                // Base level stats (already set)
+                break
+            case 2:
+                // Level 2 doubles the effect
+                stats.massMultiplier *= 2.0
+                stats.forceMagnitude *= 1.75
+            case 3:
+                // Level 3 massively increases the effect (50% of previous values)
+                stats.massMultiplier *= 4.0  // Was 8.0
+                stats.forceMagnitude *= 2.0  // Was 4.0
+            default:
+                break
+            }
+        } else {
+            // Normal scaling for other power-ups
+            let levelMultiplier = Double(level - 1) * 0.25
+            stats.forceMagnitude += levelMultiplier
+            stats.massMultiplier *= (1.0 + levelMultiplier)
+        }
         
         return stats
     }
@@ -265,7 +286,7 @@ struct PowerUp: Identifiable {
     var remainingDuration: TimeInterval = 0 // Only for environmental power-ups
     var hasBeenOffered: Bool = false
     var slotsOccupied: Int {
-        return level
+        return min(level, PowerUp.maxLevel)  // Cap slots at maxLevel
     }
     
     // Upgrade costs
@@ -585,64 +606,206 @@ class GameViewModel: ObservableObject {
         }
     }
     
-    func presentLevelUpChoices() {
-        // Check if there are any empty slots or upgradeable power-ups
-        let hasEmptySlot = equippedPowerUps.contains(where: { $0 == nil })
-        let hasUpgradeablePowerUps = !getUpgradeablePowerUps().isEmpty
-        
-        // Don't show level up screen if no slots available and no upgrades possible
-        guard hasEmptySlot || hasUpgradeablePowerUps else { return }
+    private func hasEnoughSlotsForUpgrade(_ powerUp: PowerUp) -> Bool {
+        let neededSlots = powerUp.level + 1 // Next level needs this many slots
         
         #if DEBUG
-        print("Presenting level up choices at level \(level)")
+        print("\nChecking upgrade possibility for \(powerUp.name):")
+        print("Current level: \(powerUp.level)")
+        print("Slots needed: \(neededSlots)")
         #endif
         
-        var choices: [PowerUpChoice] = []
-        var seenPowerUpNames = Set<String>() // Track by name instead of UUID
+        // First try to find slots around the current position
+        if let currentIndex = powerUp.slotIndex ?? equippedPowerUps.firstIndex(where: { $0?.id == powerUp.id }) {
+            // Check slots before current position
+            var beforeSlots = 0
+            for i in (0..<currentIndex).reversed() {
+                if equippedPowerUps[i] == nil {
+                    beforeSlots += 1
+                } else {
+                    break
+                }
+            }
+            
+            // Check current position and slots after
+            var afterSlots = 1  // Count current position
+            for i in (currentIndex + 1)..<equippedPowerUps.count {
+                if equippedPowerUps[i] == nil || equippedPowerUps[i]?.id == powerUp.id {
+                    afterSlots += 1
+                } else {
+                    break
+                }
+            }
+            
+            let totalAdjacentSlots = beforeSlots + afterSlots
+            
+            #if DEBUG
+            print("Adjacent slots check:")
+            print("- Before current position: \(beforeSlots)")
+            print("- After current position: \(afterSlots)")
+            print("- Total adjacent: \(totalAdjacentSlots)")
+            #endif
+            
+            if totalAdjacentSlots >= neededSlots {
+                #if DEBUG
+                print("✅ Found enough adjacent slots!")
+                #endif
+                return true
+            }
+        }
         
-        // Get available new power-ups only if there are empty slots
+        // If we can't find enough adjacent slots, look for any consecutive empty slots
+        var consecutiveEmptySlots = 0
+        var maxConsecutiveEmpty = 0
+        
+        for (_, slot) in equippedPowerUps.enumerated() {
+            if slot == nil {
+                consecutiveEmptySlots += 1
+                maxConsecutiveEmpty = max(maxConsecutiveEmpty, consecutiveEmptySlots)
+            } else if slot?.id != powerUp.id {
+                consecutiveEmptySlots = 0
+            }
+        }
+        
+        #if DEBUG
+        print("Consecutive empty slots check:")
+        print("- Maximum consecutive empty slots: \(maxConsecutiveEmpty)")
+        print("- Needed slots: \(neededSlots)")
+        print(maxConsecutiveEmpty >= neededSlots ? "✅ Found enough consecutive empty slots!" : "❌ Not enough consecutive slots available")
+        #endif
+        
+        return maxConsecutiveEmpty >= neededSlots
+    }
+    
+    func presentLevelUpChoices() {
+        let hasEmptySlot = equippedPowerUps.contains(where: { $0 == nil })
+        
+        #if DEBUG
+        print("\n=== Level Up Choices Debug ===")
+        print("Current equipped power-ups:")
+        for (index, powerUp) in equippedPowerUps.enumerated() {
+            if let powerUp = powerUp {
+                print("Slot \(index): \(powerUp.name) (Level \(powerUp.level))")
+            } else {
+                print("Slot \(index): Empty")
+            }
+        }
+        #endif
+        
+        // Get ALL equipped power-ups that aren't max level and have enough slots for upgrade
+        let upgradeablePowerUps = equippedPowerUps.compactMap { powerUp -> PowerUp? in
+            guard let powerUp = powerUp,
+                  powerUp.level < PowerUp.maxLevel else { return nil }
+            
+            let hasSlots = hasEnoughSlotsForUpgrade(powerUp)
+            
+            #if DEBUG
+            print("\nPower-up upgrade check: \(powerUp.name)")
+            print("- Current level: \(powerUp.level)")
+            print("- Max level: \(PowerUp.maxLevel)")
+            print("- Has enough slots: \(hasSlots)")
+            #endif
+            
+            return hasSlots ? powerUp : nil
+        }
+        
+        // Don't show level up screen if no slots available and no upgrades possible
+        guard hasEmptySlot || !upgradeablePowerUps.isEmpty else {
+            #if DEBUG
+            print("\nNo level up screen shown:")
+            print("- Has empty slot: \(hasEmptySlot)")
+            print("- Upgradeable power-ups count: \(upgradeablePowerUps.count)")
+            #endif
+            return
+        }
+        
+        var choices: [PowerUpChoice] = []
+        var seenPowerUpNames = Set<String>()
+        
+        // Get available new power-ups if there are empty slots
         if hasEmptySlot {
             let availablePowerUps = powerUpManager.getAvailablePowerUps()
                 .filter { powerUp in
-                    // Filter out any power-ups that are already equipped
+                    !seenPowerUpNames.contains(powerUp.name) &&
                     !equippedPowerUps.contains(where: { $0?.name == powerUp.name })
                 }
-            let newPowerUps = availablePowerUps.map { PowerUpChoice.new($0) }
-            for choice in newPowerUps {
-                if !seenPowerUpNames.contains(choice.powerUp.name) {
-                    choices.append(choice)
-                    seenPowerUpNames.insert(choice.powerUp.name)
-                }
+            
+            let newPowerUps = availablePowerUps.shuffled()
+            
+            // Add up to 3 new power-ups
+            for powerUp in newPowerUps.prefix(3) {
+                choices.append(PowerUpChoice.new(powerUp))
+                seenPowerUpNames.insert(powerUp.name)
+                
+                #if DEBUG
+                print("\nAdded new power-up choice:")
+                print("- Power-up: \(powerUp.name)")
+                #endif
             }
         }
         
-        // Get upgradeable power-ups
-        let upgradeablePowerUps = getUpgradeablePowerUps()
-            .map { PowerUpChoice.upgrade($0) }
-        for choice in upgradeablePowerUps {
-            if !seenPowerUpNames.contains(choice.powerUp.name) {
-                choices.append(choice)
-                seenPowerUpNames.insert(choice.powerUp.name)
+        // If we have less than 3 choices and upgrades are available,
+        // fill remaining slots with upgrades
+        if choices.count < 3 && !upgradeablePowerUps.isEmpty {
+            let shuffledUpgrades = upgradeablePowerUps.shuffled()
+            let slotsToFill = 3 - choices.count
+            let upgradesForMainSlots = shuffledUpgrades.prefix(slotsToFill)
+            
+            for powerUp in upgradesForMainSlots {
+                choices.append(PowerUpChoice.upgrade(powerUp))
+                seenPowerUpNames.insert(powerUp.name)
+                
+                #if DEBUG
+                print("\nAdded upgrade choice to main slots:")
+                print("- Power-up: \(powerUp.name)")
+                print("- Current Level: \(powerUp.level)")
+                print("- Next Level: \(powerUp.level + 1)")
+                #endif
             }
         }
         
-        // If no choices available, don't show the screen
-        guard !choices.isEmpty else { return }
+        // Ensure we have exactly 3 main choices
+        choices = Array(choices.prefix(3))
+        
+        // If we have upgradeable power-ups that weren't used in the main slots,
+        // add one as a fourth choice
+        if !upgradeablePowerUps.isEmpty {
+            let remainingUpgrades = upgradeablePowerUps.filter { powerUp in
+                !seenPowerUpNames.contains(powerUp.name)
+            }
+            
+            if let extraUpgrade = remainingUpgrades.randomElement() {
+                choices.append(PowerUpChoice.upgrade(extraUpgrade))
+                
+                #if DEBUG
+                print("\nAdded extra upgrade choice in fourth slot:")
+                print("- Power-up: \(extraUpgrade.name)")
+                print("- Current Level: \(extraUpgrade.level)")
+                print("- Next Level: \(extraUpgrade.level + 1)")
+                #endif
+            }
+        }
+        
+        // Shuffle only the first 3 choices, keeping any fourth upgrade choice in place
+        let mainChoices = Array(choices.prefix(3)).shuffled()
+        let extraChoice = choices.count > 3 ? [choices[3]] : []
+        powerUpChoices = mainChoices + extraChoice
         
         #if DEBUG
-        print("Available choices before shuffle: \(choices.map { $0.powerUp.name })")
-        #endif
-        
-        // Shuffle and take first 3 or all if less than 3
-        choices.shuffle()
-        powerUpChoices = Array(choices.prefix(3))
-        
-        #if DEBUG
-        print("Selected choices after shuffle: \(powerUpChoices.map { $0.powerUp.name })")
+        print("\nFinal choices (\(powerUpChoices.count)):")
+        for (index, choice) in powerUpChoices.enumerated() {
+            switch choice {
+            case .new(let powerUp):
+                print("\(index + 1). New: \(powerUp.name)")
+            case .upgrade(let powerUp):
+                print("\(index + 1). Upgrade: \(powerUp.name) (Level \(powerUp.level) → \(powerUp.level + 1))")
+            }
+        }
+        print("=== End Debug ===\n")
         #endif
         
         isLevelUpViewPresented = true
-        saveGameState() // Save upon reaching a new level
+        saveGameState()
     }
     
     func rerollChoices() {
@@ -653,37 +816,6 @@ class GameViewModel: ObservableObject {
     
     func skipLevelUp() {
         isLevelUpViewPresented = false
-    }
-    
-    private func getUpgradeablePowerUps() -> [PowerUp] {
-        return equippedPowerUps.compactMap { $0 }
-            .filter { $0.level < PowerUp.maxLevel }
-            .filter { hasEnoughSlotsForUpgrade($0) }
-    }
-    
-    private func hasEnoughSlotsForUpgrade(_ powerUp: PowerUp) -> Bool {
-        // Find the start index of this power-up
-        guard let currentIndex = powerUp.slotIndex ?? equippedPowerUps.firstIndex(where: { $0?.id == powerUp.id }) else {
-            return false
-        }
-        
-        let neededSlots = powerUp.level + 1 // Next level needs this many slots
-        var availableSlots = 0
-        
-        // Count available slots starting from the power-up's current position
-        for i in currentIndex..<equippedPowerUps.count {
-            let slot = equippedPowerUps[i]
-            if slot == nil || slot?.id == powerUp.id {
-                availableSlots += 1
-                if availableSlots >= neededSlots {
-                    return true
-                }
-            } else {
-                break
-            }
-        }
-        
-        return false
     }
     
     func selectPowerUp(_ choice: PowerUpChoice) {
@@ -1728,7 +1860,7 @@ struct PowerUpChoiceCard: View {
                     if choice.isUpgrade {
                         Text("Upgrade to Lv\(choice.powerUp.level + 1)")
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.green)  // Make upgrade text green to stand out
                     }
                 }
             }
@@ -1737,7 +1869,11 @@ struct PowerUpChoiceCard: View {
             .padding(.horizontal, 8)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(white: 0.2))
+                    .fill(Color(white: choice.isUpgrade ? 0.25 : 0.2))  // Slightly different background for upgrades
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(choice.isUpgrade ? Color.green.opacity(0.3) : Color.clear, lineWidth: 1)
+                    )
             )
         }
         .buttonStyle(.plain)
@@ -2555,20 +2691,64 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         body.categoryBitMask = PhysicsCategory.sphere
         body.contactTestBitMask = PhysicsCategory.sphere | PhysicsCategory.dangerZone
         body.collisionBitMask = PhysicsCategory.sphere | PhysicsCategory.wall
-        body.restitution = 0.1
-        body.friction = 0.05
-        body.allowsRotation = true
-        body.linearDamping = 0.1
-        body.angularDamping = 0.1
         
-        let maxTierMass: CGFloat = 12
-        let baseMass: CGFloat = 10.0
-        let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
-        body.mass = baseMass * massMultiplier * ballScale // Scale mass with ball size
+        // Apply power-up mass multiplier if Super Massive Ball is active
+        if let activePowerUps = sphere.userData?["activePowerUps"] as? [String],
+           activePowerUps.contains("Super Massive Ball") {
+            // Super Massive Ball specific physics properties
+            body.restitution = 0.3  // More bouncy
+            body.friction = 0.02    // Less friction
+            body.linearDamping = 0.05  // Much less air resistance
+            body.angularDamping = 0.05
+            
+            // Calculate enhanced mass
+            let maxTierMass: CGFloat = 12
+            let baseMass: CGFloat = 7.5  // 50% of previous value (was 15.0)
+            let massMultiplier = pow(2.0, maxTierMass - CGFloat(tier))
+            var finalMass = baseMass * massMultiplier * ballScale
+            
+            if let powerUp = viewModel?.equippedPowerUps.compactMap({ $0 }).first(where: { $0.name == "Super Massive Ball" }) {
+                #if DEBUG
+                print("\nApplying Super Massive Ball physics:")
+                print("- Power-up level: \(powerUp.level)")
+                #endif
+                
+                let stats = PowerUpStats.baseStats(for: powerUp).scaled(to: powerUp.level)
+                finalMass *= CGFloat(stats.massMultiplier)
+                
+                // Scale the impulse based on the power-up level
+                let impulseMultiplier = CGFloat(stats.forceMagnitude) * -600.0  // 50% of previous value (was -1200.0)
+                let downwardImpulse = CGVector(dx: 0, dy: impulseMultiplier * finalMass)
+                
+                #if DEBUG
+                print("- Base mass: \(baseMass)")
+                print("- Mass multiplier: \(stats.massMultiplier)x")
+                print("- Force magnitude: \(stats.forceMagnitude)x")
+                print("- Final mass: \(finalMass)")
+                print("- Impulse multiplier: \(impulseMultiplier)")
+                print("- Final impulse: \(downwardImpulse.dy)")
+                #endif
+                
+                // Apply the impulse after a short delay to ensure physics body is ready
+                sphere.run(SKAction.wait(forDuration: 0.1)) {
+                    body.applyImpulse(downwardImpulse)
+                }
+            }
+            body.mass = finalMass
+        } else {
+            // Normal ball physics properties
+            body.restitution = 0.1
+            body.friction = 0.05
+            body.linearDamping = 0.1
+            body.angularDamping = 0.1
+            
+            let maxTierMass: CGFloat = 12
+            let baseMass: CGFloat = 10.0
+            let massMultiplier = pow(1.5, maxTierMass - CGFloat(tier))
+            body.mass = baseMass * massMultiplier * ballScale
+        }
         
         sphere.physicsBody = body
-        
-        // Add creation timestamp when physics is added (when the ball is dropped)
         sphere.userData?["creationTime"] = Date().timeIntervalSinceReferenceDate
     }
     

@@ -51,6 +51,7 @@ struct PowerUp {
 struct PowerUpStats {
     var duration: TimeInterval?  // nil for single-use, 10s base for environmental
     var forceMagnitude: Double   // Effect strength multiplier
+    var massMultiplier: Double   // Physics mass multiplier
 }
 ```
 
@@ -58,14 +59,31 @@ struct PowerUpStats {
 
 ### 1. Gravity Category
 #### Super Massive Ball (Single-Use)
-- **Status**: Partially Implemented
+- **Status**: ✅ Fully Implemented
 - **Implementation Progress**:
   - [x] Add visual indicator for affected ball (blue stroke)
   - [x] Implement power-up state persistence
   - [x] Implement single active power-up system
-  - [ ] Modify ball physics properties when power-up is active
-  - [ ] Increase mass and downward force on release
-  - [ ] Add screen shake on impact
+  - [x] Modify ball physics properties when power-up is active
+  - [x] Increase mass and downward force on release
+  - [x] Add screen shake on impact
+- **Level Scaling**:
+  - Level 1 (Base):
+    - Mass multiplier: 2.0x
+    - Force magnitude: 0.75x
+    - Base mass: 7.5
+    - Base impulse: -600.0
+  - Level 2:
+    - Mass multiplier: 4.0x
+    - Force magnitude: 1.31x (1.75x base)
+  - Level 3:
+    - Mass multiplier: 8.0x
+    - Force magnitude: 1.5x (2.0x base)
+- **Physics Properties**:
+  - Restitution: 0.3 (more bouncy)
+  - Friction: 0.02 (less friction)
+  - Linear/Angular Damping: 0.05 (less air resistance)
+  - Mass calculation uses pow(2.0) curve for steeper scaling
 
 #### Low Gravity (Environmental)
 - **Status**: Partially Implemented
