@@ -90,7 +90,10 @@ struct PowerUpSave: Codable {
     let id: String // power-up name key
     var level: Int
     var slotIndex: Int
-    var isActive: Bool // Add isActive status
+    var isActive: Bool
+    var isPrimed: Bool
+    var remainingDuration: TimeInterval
+    var type: PowerUpType
 }
 
 struct SphereState: Codable {
@@ -170,44 +173,52 @@ enum PowerUpCategory: String, CaseIterable {
     case gravity = "Gravity"
     case magnetism = "Magnetism"
     case void = "Void"
-    case friction = "Friction"
+    case physics = "Physics"
     
     var description: String {
         switch self {
         case .gravity: return "Physics-based effects that modify mass and gravity"
         case .magnetism: return "Attraction and repulsion effects"
         case .void: return "Object removal and deletion effects"
-        case .friction: return "Surface and movement modifiers"
+        case .physics: return "Surface and material property modifiers"
         }
     }
 }
 
-enum PowerUpType {
+enum PowerUpType: String, Codable {
     case singleUse
     case environment
+    case targeting
 }
 
 struct PowerUpStats {
     var duration: TimeInterval?  // nil for single-use effects
-    var cooldown: TimeInterval
     var forceMagnitude: Double
     
     static func baseStats(for powerUp: PowerUp) -> PowerUpStats {
         switch powerUp.name {
+        // Single-use power-ups (no duration)
         case "Super Massive Ball":
-            return PowerUpStats(duration: nil, cooldown: 35, forceMagnitude: 1.5)
-        case "Low Gravity":
-            return PowerUpStats(duration: 10, cooldown: 45, forceMagnitude: 0.5)
+            return PowerUpStats(duration: nil, forceMagnitude: 1.5)
         case "Magnetic Ball":
-            return PowerUpStats(duration: nil, cooldown: 30, forceMagnitude: 0.5)
-        case "Repulsion Field":
-            return PowerUpStats(duration: nil, cooldown: 40, forceMagnitude: 0.5)
+            return PowerUpStats(duration: nil, forceMagnitude: 0.5)
         case "Negative Ball":
-            return PowerUpStats(duration: nil, cooldown: 45, forceMagnitude: 1.0)
+            return PowerUpStats(duration: nil, forceMagnitude: 1.0)
         case "Selective Deletion":
-            return PowerUpStats(duration: nil, cooldown: 60, forceMagnitude: 1.0)
+            return PowerUpStats(duration: nil, forceMagnitude: 1.0)
+        case "Repulsion Field":
+            return PowerUpStats(duration: nil, forceMagnitude: 0.5)
+            
+        // Environmental power-ups (all need duration)
+        case "Low Gravity":
+            return PowerUpStats(duration: 10, forceMagnitude: 0.5)
+        case "Rubber World":
+            return PowerUpStats(duration: 10, forceMagnitude: 1.5)
+        case "Ice World":
+            return PowerUpStats(duration: 10, forceMagnitude: 0.1)
+            
         default:
-            return PowerUpStats(duration: nil, cooldown: 30, forceMagnitude: 1.0)
+            return PowerUpStats(duration: nil, forceMagnitude: 1.0)
         }
     }
     
@@ -218,9 +229,6 @@ struct PowerUpStats {
         if let duration = stats.duration {
             stats.duration = duration + (Double(level - 1) * 2)
         }
-        
-        // Cooldown reduction of 5 seconds per level
-        stats.cooldown = max(15, cooldown - (Double(level - 1) * 5))
         
         // Force magnitude scaling based on power-up type
         let forceMagnitudeIncrease = Double(level - 1) * 0.25
@@ -252,8 +260,9 @@ struct PowerUp: Identifiable {
     }
     
     // Game state
+    var isPrimed: Bool = false
     var isActive: Bool = false
-    var remainingCooldown: TimeInterval = 0
+    var remainingDuration: TimeInterval = 0 // Only for environmental power-ups
     var hasBeenOffered: Bool = false
     var slotsOccupied: Int {
         return level
@@ -269,22 +278,13 @@ struct PowerUp: Identifiable {
 
 class PowerUpManager: ObservableObject {
     @Published var powerUps: [PowerUp] = [
+        // SINGLE-USE POWER-UPS (affect next spawned ball)
         PowerUp(
             name: "Super Massive Ball",
             description: "Makes selected ball super dense, applies strong downward impulse on release",
             category: .gravity,
             type: .singleUse,
             icon: "circle.circle.fill",
-            isUnlocked: false,
-            level: 1,
-            cost: 1000
-        ),
-        PowerUp(
-            name: "Low Gravity",
-            description: "Modifies physics world gravity, affects all balls in play area",
-            category: .gravity,
-            type: .environment,
-            icon: "arrow.down.circle",
             isUnlocked: false,
             level: 1,
             cost: 1000
@@ -300,16 +300,6 @@ class PowerUpManager: ObservableObject {
             cost: 1000
         ),
         PowerUp(
-            name: "Repulsion Field",
-            description: "Repels balls of different tiers",
-            category: .magnetism,
-            type: .singleUse,
-            icon: "rays",
-            isUnlocked: false,
-            level: 1,
-            cost: 1000
-        ),
-        PowerUp(
             name: "Negative Ball",
             description: "Single-use deletion tool, removes itself and first ball touched",
             category: .void,
@@ -319,12 +309,56 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 1000
         ),
+        
+        // ENVIRONMENTAL POWER-UPS (affect entire play area)
+        PowerUp(
+            name: "Low Gravity",
+            description: "Modifies physics world gravity, affects all balls in play area",
+            category: .gravity,
+            type: .environment,
+            icon: "arrow.down.circle",
+            isUnlocked: false,
+            level: 1,
+            cost: 1000
+        ),
+        PowerUp(
+            name: "Rubber World",
+            description: "Makes all surfaces and balls extremely bouncy",
+            category: .physics,
+            type: .environment,
+            icon: "arrow.up.and.down.circle",
+            isUnlocked: false,
+            level: 1,
+            cost: 1000
+        ),
+        PowerUp(
+            name: "Ice World",
+            description: "Makes all surfaces ultra slippery with minimal friction",
+            category: .physics,
+            type: .environment,
+            icon: "snowflake",
+            isUnlocked: false,
+            level: 1,
+            cost: 1000
+        ),
+        
+        // TARGETING POWER-UPS (affect existing balls)
         PowerUp(
             name: "Selective Deletion",
             description: "Tap-to-select mechanic for strategic ball removal",
             category: .void,
-            type: .singleUse,
+            type: .targeting,
             icon: "trash.circle.fill",
+            isUnlocked: false,
+            level: 1,
+            cost: 1000
+        ),
+        PowerUp(
+            name: "Repulsion Field",
+            description: "Creates a repulsion zone around selected ball",
+            category: .magnetism,
+            type: .targeting,
+            icon: "rays",
             isUnlocked: false,
             level: 1,
             cost: 1000
@@ -396,22 +430,12 @@ class PowerUpManager: ObservableObject {
     }
     
     func activate(_ powerUp: PowerUp) -> Bool {
-        guard powerUp.isUnlocked && powerUp.remainingCooldown <= 0 else { return false }
+        guard powerUp.isUnlocked else { return false }
         if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
             powerUps[index].isActive = true
-            powerUps[index].remainingCooldown = powerUp.currentStats.cooldown
             return true
         }
         return false
-    }
-    
-    func updateCooldowns(deltaTime: TimeInterval) {
-        for (index, powerUp) in powerUps.enumerated() where powerUp.remainingCooldown > 0 {
-            powerUps[index].remainingCooldown = max(0, powerUp.remainingCooldown - deltaTime)
-            if powerUp.remainingCooldown == 0 {
-                powerUps[index].isActive = false
-            }
-        }
     }
 }
 
@@ -425,10 +449,11 @@ class GameViewModel: ObservableObject {
     @Published var level: Int = 1
     @Published var isGamePaused: Bool = false
     @Published var selectedFlaskSize: FlaskSize = .small
-    let xpNeededPerLevel: Int = 30
+    let xpNeededPerLevel: Int = 10  // Changed from 30 to 10 for testing
     let powerUpManager: PowerUpManager
     @Published private var sphereStates: [SphereState] = []
     var sphereStateProvider: (() -> [SphereState])?
+    private var powerUpTimer: Timer?
     
     // Define a type to represent either a new power-up or an upgrade
     enum PowerUpChoice: Identifiable {
@@ -462,6 +487,56 @@ class GameViewModel: ObservableObject {
         if let state = state {
             self.applyGameState(state)
         }
+        startPowerUpTimer()
+    }
+    
+    deinit {
+        powerUpTimer?.invalidate()
+    }
+    
+    private func startPowerUpTimer() {
+        powerUpTimer?.invalidate()
+        powerUpTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.updatePowerUpTimers()
+        }
+    }
+    
+    private func updatePowerUpTimers() {
+        guard !isGamePaused else { return }
+        
+        let deltaTime: TimeInterval = 0.1
+        var needsUpdate = false
+        
+        for i in equippedPowerUps.indices {
+            guard var powerUp = equippedPowerUps[i] else { continue }
+            
+            // Update duration for active environmental power-ups
+            if powerUp.type == .environment && powerUp.isActive {
+                if powerUp.remainingDuration > 0 {
+                    powerUp.remainingDuration = max(0, powerUp.remainingDuration - deltaTime)
+                    needsUpdate = true
+                    
+                    // Deactivate if duration is up
+                    if powerUp.remainingDuration == 0 {
+                        powerUp.isActive = false
+                        powerUp.isPrimed = false
+                        #if DEBUG
+                        print("\(powerUp.name) deactivated due to duration end!")
+                        #endif
+                    }
+                }
+            }
+            
+            if needsUpdate {
+                // Update all slots for this power up
+                let idToUpdate = powerUp.id
+                for j in equippedPowerUps.indices {
+                    if equippedPowerUps[j]?.id == idToUpdate {
+                        equippedPowerUps[j] = powerUp
+                    }
+                }
+            }
+        }
     }
     
     private func applyGameState(_ state: GameState) {
@@ -486,8 +561,17 @@ class GameViewModel: ObservableObject {
                     var instance = base
                     instance.level = save.level
                     instance.slotIndex = save.slotIndex
-                    instance.isActive = save.isActive // Restore active state
+                    instance.isActive = save.isActive
+                    instance.isPrimed = save.isPrimed
+                    instance.remainingDuration = save.remainingDuration
                     equippedPowerUps[slot] = instance
+                    
+                    // If this is an active environmental power-up, make sure the timer is running
+                    if instance.type == .environment && instance.isActive && instance.remainingDuration > 0 {
+                        #if DEBUG
+                        print("Restored active environmental power-up: \(instance.name) with \(instance.remainingDuration)s remaining")
+                        #endif
+                    }
                 }
             }
             self.score = run.score
@@ -601,53 +685,118 @@ class GameViewModel: ObservableObject {
     }
     
     func activatePowerUp(_ powerUpToActivate: PowerUp) {
-        // If this power-up is already active, just deactivate it
-        if let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }),
-           var powerUp = equippedPowerUps[index],
-           powerUp.isActive {
-            powerUp.isActive = false
-            #if DEBUG
-            print("\(powerUp.name) deactivated!")
-            #endif
-            
-            // update all slots for this power up
-            let idToUpdate = powerUp.id
-            for i in equippedPowerUps.indices {
-                if equippedPowerUps[i]?.id == idToUpdate {
-                    equippedPowerUps[i] = powerUp
-                }
-            }
-            return
-        }
+        // Find the power-up in equipped slots
+        guard let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }),
+              var powerUp = equippedPowerUps[index] else { return }
         
-        // Deactivate any currently active power-ups first
-        for i in equippedPowerUps.indices {
-            if var powerUp = equippedPowerUps[i], powerUp.isActive {
-                powerUp.isActive = false
-                #if DEBUG
-                print("\(powerUp.name) deactivated due to new activation!")
-                #endif
-                
-                // update all slots for this power up
-                let idToUpdate = powerUp.id
-                for j in equippedPowerUps.indices {
-                    if equippedPowerUps[j]?.id == idToUpdate {
-                        equippedPowerUps[j] = powerUp
+        // Handle environmental power-ups differently
+        if powerUp.type == .environment {
+            // If already active, do nothing (can only be deactivated by timer)
+            if powerUp.isActive {
+                return
+            }
+            // If primed, activate it
+            else if powerUp.isPrimed {
+                // Deactivate any primed power-ups
+                for i in equippedPowerUps.indices {
+                    if var otherPowerUp = equippedPowerUps[i],
+                       otherPowerUp.id != powerUp.id,
+                       otherPowerUp.isPrimed {
+                        otherPowerUp.isPrimed = false
+                        #if DEBUG
+                        print("\(otherPowerUp.name) deprimed due to new activation!")
+                        #endif
+                        
+                        // Update all slots for this power up
+                        let idToUpdate = otherPowerUp.id
+                        for j in equippedPowerUps.indices {
+                            if equippedPowerUps[j]?.id == idToUpdate {
+                                equippedPowerUps[j] = otherPowerUp
+                            }
+                        }
                     }
                 }
+                
+                powerUp.isActive = true
+                powerUp.isPrimed = false
+                powerUp.remainingDuration = powerUp.currentStats.duration ?? 0
+                #if DEBUG
+                print("\(powerUp.name) activated with duration: \(powerUp.remainingDuration)s!")
+                #endif
+            }
+            // If neither, prime it
+            else {
+                // Deactivate any other environmental power-ups first
+                for i in equippedPowerUps.indices {
+                    if var otherPowerUp = equippedPowerUps[i],
+                       otherPowerUp.id != powerUp.id,
+                       otherPowerUp.type == .environment,
+                       (otherPowerUp.isActive || otherPowerUp.isPrimed) {
+                        otherPowerUp.isActive = false
+                        otherPowerUp.isPrimed = false
+                        #if DEBUG
+                        print("\(otherPowerUp.name) deactivated due to new priming!")
+                        #endif
+                        
+                        // Update all slots for this power up
+                        let idToUpdate = otherPowerUp.id
+                        for j in equippedPowerUps.indices {
+                            if equippedPowerUps[j]?.id == idToUpdate {
+                                equippedPowerUps[j] = otherPowerUp
+                            }
+                        }
+                    }
+                }
+                
+                powerUp.isPrimed = true
+                #if DEBUG
+                print("\(powerUp.name) primed!")
+                #endif
+            }
+        }
+        // Handle single-use power-ups
+        else {
+            // If this power-up is already active, just deactivate it
+            if powerUp.isActive {
+                powerUp.isActive = false
+                #if DEBUG
+                print("\(powerUp.name) deactivated!")
+                #endif
+            } else {
+                // Deactivate any primed power-ups and other single-use power-ups
+                for i in equippedPowerUps.indices {
+                    if var otherPowerUp = equippedPowerUps[i],
+                       otherPowerUp.id != powerUp.id {
+                        if otherPowerUp.isPrimed {
+                            otherPowerUp.isPrimed = false
+                            #if DEBUG
+                            print("\(otherPowerUp.name) deprimed due to new activation!")
+                            #endif
+                        } else if otherPowerUp.type == .singleUse && otherPowerUp.isActive {
+                            otherPowerUp.isActive = false
+                            #if DEBUG
+                            print("\(otherPowerUp.name) deactivated due to new activation!")
+                            #endif
+                        }
+                        
+                        // Update all slots for this power up
+                        let idToUpdate = otherPowerUp.id
+                        for j in equippedPowerUps.indices {
+                            if equippedPowerUps[j]?.id == idToUpdate {
+                                equippedPowerUps[j] = otherPowerUp
+                            }
+                        }
+                    }
+                }
+                
+                powerUp.isActive = true
+                #if DEBUG
+                print("\(powerUp.name) activated!")
+                #endif
             }
         }
         
-        // Now activate the new power-up
-        guard let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }) else { return }
-        guard var powerUp = equippedPowerUps[index] else { return }
-        
-        powerUp.isActive = true
-        #if DEBUG
-        print("\(powerUp.name) activated!")
-        #endif
-        
-        // update all slots for this power up
+        // Update all slots for this power up
         let idToUpdate = powerUp.id
         for i in equippedPowerUps.indices {
             if equippedPowerUps[i]?.id == idToUpdate {
@@ -750,7 +899,15 @@ class GameViewModel: ObservableObject {
         // Build RunState with equipped power-ups
         let equipped: [PowerUpSave?] = equippedPowerUps.enumerated().map { index, item in
             guard let item = item else { return nil }
-            return PowerUpSave(id: item.name, level: item.level, slotIndex: item.slotIndex ?? index, isActive: item.isActive)
+            return PowerUpSave(
+                id: item.name,
+                level: item.level,
+                slotIndex: item.slotIndex ?? index,
+                isActive: item.isActive,
+                isPrimed: item.isPrimed,
+                remainingDuration: item.remainingDuration,
+                type: item.type
+            )
         }
         let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates, selectedFlaskSize: selectedFlaskSize)
         
@@ -1201,35 +1358,72 @@ struct PowerUpSlot: View {
         self.totalSlots = totalSlots
     }
     
+    private var strokeColor: Color {
+        guard let powerUp = powerUp else { return Color.gray.opacity(0.3) }
+        
+        if powerUp.type == .environment {
+            if powerUp.isActive {
+                return .blue
+            } else if powerUp.isPrimed {
+                return .blue.opacity(0.5)
+            }
+        } else if powerUp.isActive {
+            return .blue
+        }
+        
+        return Color.gray.opacity(0.3)
+    }
+    
+    private var strokeWidth: CGFloat {
+        guard let powerUp = powerUp else { return 2 }
+        return (powerUp.isActive || powerUp.isPrimed) ? 3 : 2
+    }
+    
     var body: some View {
         GeometryReader { geometry in
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(powerUp?.isActive == true ? .blue : Color.gray.opacity(0.3), lineWidth: 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.1))
-                )
-                .overlay(
-                    Group {
-                        if let powerUp = powerUp {
-                            VStack(spacing: 2) {
-                                Image(systemName: powerUp.icon)
-                                    .foregroundColor(.blue)
-                                    .font(.system(size: 20))
-                                if powerUp.level > 1 {
-                                    Text("Lv\(powerUp.level)")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.gray)
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                        } else {
-                            Image(systemName: "questionmark.circle")
-                                .foregroundColor(.gray.opacity(0.5))
+            ZStack {
+                // Background and border
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(strokeColor, lineWidth: strokeWidth)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.gray.opacity(0.1))
+                    )
+                
+                // Duration progress for active environmental power-ups
+                if let powerUp = powerUp,
+                   powerUp.type == .environment,
+                   powerUp.isActive,
+                   let duration = powerUp.currentStats.duration {
+                    let progress = powerUp.remainingDuration / duration
+                    Circle()
+                        .trim(from: 0, to: CGFloat(progress))
+                        .stroke(strokeColor.opacity(0.3), lineWidth: 3)
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 40, height: 40)
+                }
+                
+                // Icon and level
+                Group {
+                    if let powerUp = powerUp {
+                        VStack(spacing: 2) {
+                            Image(systemName: powerUp.icon)
+                                .foregroundColor(powerUp.isActive ? .blue : .blue.opacity(powerUp.isPrimed ? 0.5 : 1))
                                 .font(.system(size: 20))
+                            if powerUp.level > 1 {
+                                Text("Lv\(powerUp.level)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.gray)
+                            }
                         }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Image(systemName: "questionmark.circle")
+                            .foregroundColor(.gray.opacity(0.5))
+                            .font(.system(size: 20))
                     }
-                )
+                }
+            }
         }
         .frame(height: 50)
     }
@@ -1581,12 +1775,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let gameOverThreshold: TimeInterval = 5.0
     private var dangerStartTime: TimeInterval?
     private var gridNode: SKNode?
+    private var environmentalBorder: SKShapeNode?
     
     // Define power-up colors
     private let powerUpColors: [String: SKColor] = [
+        // Single-use power-ups
         "Super Massive Ball": SKColor(Color.blue),
+        "Magnetic Ball": SKColor(Color.purple),
         "Negative Ball": SKColor(Color.red),
-        "Magnetic Ball": SKColor(Color.purple)
+        
+        // Environmental power-ups
+        "Low Gravity": SKColor(Color.blue),
+        "Rubber World": SKColor(Color.green),
+        "Ice World": SKColor(Color.cyan),
+        
+        // Targeting power-ups
+        "Selective Deletion": SKColor(Color.red.opacity(0.7)),
+        "Repulsion Field": SKColor(Color.orange)
     ]
     
     // Helper for checking active power-ups
@@ -1596,11 +1801,42 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }) ?? false
     }
     
+    // Environmental power-up colors with opacity variants
+    private func getEnvironmentalColor(for powerUpName: String, isPrimed: Bool) -> SKColor {
+        guard let baseColor = powerUpColors[powerUpName] else {
+            return isPrimed ? SKColor(Color.blue.opacity(0.5)) : SKColor(Color.blue)
+        }
+        return isPrimed ? baseColor.withAlphaComponent(0.5) : baseColor
+    }
+    
+    // Update the border color method
+    private func updateEnvironmentalBorder() {
+        if let (isPrimed, isActive, powerUpName) = getEnvironmentalPowerUpState() {
+            let color = getEnvironmentalColor(for: powerUpName, isPrimed: isPrimed)
+            environmentalBorder?.strokeColor = isActive ? color : (isPrimed ? color.withAlphaComponent(0.5) : .clear)
+        } else {
+            environmentalBorder?.strokeColor = .clear
+        }
+    }
+    
+    // Helper for checking primed or active environmental power-ups
+    private func getEnvironmentalPowerUpState() -> (isPrimed: Bool, isActive: Bool, name: String)? {
+        guard let environmentalPowerUp = viewModel?.equippedPowerUps
+            .compactMap({ $0 })
+            .first(where: { $0.type == .environment && ($0.isPrimed || $0.isActive) })
+        else { return nil }
+        
+        return (environmentalPowerUp.isPrimed, environmentalPowerUp.isActive, environmentalPowerUp.name)
+    }
+    
     // Get the active power-up that should affect the current ball
     private var currentActivePowerUp: (name: String, color: SKColor)? {
         for (powerUpName, color) in powerUpColors {
-            if hasActivePowerUp(powerUpName) {
-                return (powerUpName, color)
+            if let powerUp = viewModel?.equippedPowerUps.compactMap({ $0 }).first(where: { $0.name == powerUpName && $0.isActive }) {
+                // Only return non-environmental power-ups for ball effects
+                if powerUp.type != .environment {
+                    return (powerUpName, color)
+                }
             }
         }
         return nil
@@ -1675,6 +1911,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         setupGrid()
         setupDangerZone()
+        setupEnvironmentalBorder() // Add border setup
         
         // Restore spheres from saved state if available
         if let sphereStates = viewModel?.getSphereStates(), !sphereStates.isEmpty {
@@ -1819,6 +2056,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         body.contactTestBitMask = PhysicsCategory.sphere
         body.collisionBitMask = PhysicsCategory.none
         dangerZone?.physicsBody = body
+    }
+    
+    func setupEnvironmentalBorder() {
+        let borderRect = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
+        let border = SKShapeNode(rect: borderRect, cornerRadius: 12)
+        border.strokeColor = .clear
+        border.lineWidth = 4
+        border.name = "environmentalBorder"
+        addChild(border)
+        environmentalBorder = border
     }
     
     func spawnNewSphere(at position: CGPoint? = nil, animated: Bool) {
@@ -2023,6 +2270,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     override func update(_ currentTime: TimeInterval) {
+        // Update environmental border state
+        updateEnvironmentalBorder()
+        
         // Update current sphere appearance if power-up state changes
         if let currentSphere = currentSphere {
             if let activePowerUp = currentActivePowerUp {
