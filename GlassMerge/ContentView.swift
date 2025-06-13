@@ -1039,15 +1039,77 @@ class GameViewModel: ObservableObject {
         upgradedPowerUp.slotIndex = startIndex
         upgradedPowerUp.isActive = powerUp.isActive // Preserve active state during upgrade
         
-        // Clear all slots occupied by any instance of this power-up
+        // Calculate how many slots we need
+        let slotsNeeded = upgradedPowerUp.slotsOccupied
+        
+        // Check if we have enough consecutive slots without overwriting other power-ups
+        var availableSlots: [Int] = []
+        var consecutiveSlots = 0
+        var bestStartIndex = startIndex
+        var maxConsecutiveSlots = 0
+        
+        // First, try to find slots around the current position
+        for i in 0..<equippedPowerUps.count {
+            if equippedPowerUps[i] == nil || equippedPowerUps[i]?.id == powerUp.id {
+                consecutiveSlots += 1
+                availableSlots.append(i)
+                
+                if consecutiveSlots > maxConsecutiveSlots {
+                    maxConsecutiveSlots = consecutiveSlots
+                    bestStartIndex = i - (consecutiveSlots - 1)
+                }
+            } else {
+                consecutiveSlots = 0
+                availableSlots = []
+            }
+            
+            // If we found enough slots, break
+            if consecutiveSlots >= slotsNeeded {
+                break
+            }
+        }
+        
+        #if DEBUG
+        print("\nUpgrading power-up: \(powerUp.name)")
+        print("- From level: \(powerUp.level)")
+        print("- To level: \(upgradedPowerUp.level)")
+        print("- Slots needed: \(slotsNeeded)")
+        print("- Best start index: \(bestStartIndex)")
+        print("- Max consecutive slots: \(maxConsecutiveSlots)")
+        #endif
+        
+        // Check if we found enough consecutive slots
+        guard maxConsecutiveSlots >= slotsNeeded else {
+            #if DEBUG
+            print("❌ Not enough consecutive slots available for upgrade!")
+            #endif
+            return
+        }
+        
+        // Clear only the slots that were occupied by this power-up
         for index in instances {
             clearSlotsForPowerUp(startingAt: index)
         }
         
-        // Place upgraded version in consecutive slots
-        for i in startIndex..<min(startIndex + upgradedPowerUp.slotsOccupied, equippedPowerUps.count) {
-            equippedPowerUps[i] = upgradedPowerUp
+        // Place upgraded version in consecutive slots starting at the best position
+        for i in 0..<slotsNeeded {
+            let slotIndex = bestStartIndex + i
+            if slotIndex < equippedPowerUps.count {
+                equippedPowerUps[slotIndex] = upgradedPowerUp
+            }
         }
+        
+        #if DEBUG
+        print("✅ Power-up upgraded successfully")
+        print("Current slot state:")
+        for (index, slot) in equippedPowerUps.enumerated() {
+            if let powerUp = slot {
+                print("Slot \(index): \(powerUp.name) (Level \(powerUp.level))")
+            } else {
+                print("Slot \(index): Empty")
+            }
+        }
+        #endif
     }
     
     private func findFirstEmptySlot() -> Int? {
@@ -2036,8 +2098,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if let (isPrimed, isActive, powerUpName) = getEnvironmentalPowerUpState() {
             let color = getEnvironmentalColor(for: powerUpName, isPrimed: isPrimed)
             environmentalBorder?.strokeColor = isActive ? color : (isPrimed ? color.withAlphaComponent(0.5) : .clear)
+            
+            // Apply Low Gravity effect when active
+            if powerUpName == "Low Gravity" && isActive {
+                applyLowGravityEffect()
+            } else if powerUpName == "Low Gravity" && !isActive {
+                // Reset gravity when Low Gravity is deactivated
+                physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+            }
         } else {
             environmentalBorder?.strokeColor = .clear
+            // Reset gravity when no environmental power-up is active
+            physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
         }
     }
     
@@ -3047,6 +3119,50 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         #if DEBUG
         print("Activated targeting power-up: \(powerUp.name) on sphere and reset power-up state")
         #endif
+    }
+    
+    // MARK: - Environmental Power-Up Effects
+    
+    private func applyLowGravityEffect() {
+        // Find the active Low Gravity power-up
+        guard let powerUp = viewModel?.equippedPowerUps
+            .compactMap({ $0 })
+            .first(where: { $0.name == "Low Gravity" && $0.isActive }) else {
+            return
+        }
+        
+        // Calculate gravity reduction based on level
+        // Level 1: 0.5x normal gravity (dy: -4.9)
+        // Level 2: 0.25x normal gravity (dy: -2.45) - 75% reduction
+        // Level 3: 0.1x normal gravity (dy: -0.98) - 90% reduction
+        let baseGravity: CGFloat = -9.8
+        let baseReduction: CGFloat = 0.5 // 50% of normal gravity at level 1
+        
+        // Use exponential scaling for stronger effect at higher levels
+        let gravityMultiplier: CGFloat
+        switch powerUp.level {
+        case 1:
+            gravityMultiplier = baseReduction // 50% reduction
+        case 2:
+            gravityMultiplier = baseReduction * 0.5 // 75% reduction
+        case 3:
+            gravityMultiplier = baseReduction * 0.2 // 90% reduction
+        default:
+            gravityMultiplier = baseReduction
+        }
+        
+        let newGravity = baseGravity * gravityMultiplier
+        
+        #if DEBUG
+        print("Applying Low Gravity effect:")
+        print("- Power-up level: \(powerUp.level)")
+        print("- Gravity multiplier: \(gravityMultiplier)x")
+        print("- New gravity: \(newGravity)")
+        print("- Gravity reduction: \((1 - gravityMultiplier) * 100)%")
+        #endif
+        
+        // Apply the modified gravity
+        physicsWorld.gravity = CGVector(dx: 0, dy: newGravity)
     }
 }
 
