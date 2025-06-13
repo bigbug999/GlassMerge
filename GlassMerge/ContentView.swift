@@ -2638,18 +2638,26 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     // MARK: - Targeting Circle
-    private let targetingCircleRadius: CGFloat = 50.0
+    private let targetingCircleRadius: CGFloat = 25.0 // Half of base grid spacing
     
+    private func calculateTargetingPadding(forTier tier: Int) -> CGFloat {
+        // Base padding of 6px for tier 1, scaling up by 2px per tier
+        let basePadding: CGFloat = 6.0
+        let paddingIncreasePerTier: CGFloat = 2.0
+        return basePadding + (CGFloat(tier - 1) * paddingIncreasePerTier)
+    }
+
     private func createTargetingCircle() -> SKShapeNode {
         let circle = SKShapeNode()
         
-        // Create a dashed circle path
-        let path = CGMutablePath()
-        let radius = targetingCircleRadius
-        let segments = 32 // Number of segments in the circle
+        // Start with smallest tier radius + scaled padding
+        let padding = calculateTargetingPadding(forTier: 1)
+        let radius = (GameScene.calculateRadius(forTier: 1) * ballScale) + padding
+        let segments = 32
         let segmentAngle = 2 * CGFloat.pi / CGFloat(segments)
         
         // Create dashed segments
+        let path = CGMutablePath()
         for i in 0..<segments {
             if i % 2 == 0 { // Draw every other segment
                 let startAngle = segmentAngle * CGFloat(i)
@@ -2670,22 +2678,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         circle.path = path
-        
-        // Make the circle more visible
         circle.strokeColor = SKColor.white
-        circle.lineWidth = 3.0
+        circle.lineWidth = 2.0
         circle.alpha = 0.7
         circle.name = "targetingCircle"
-        circle.zPosition = 100 // Ensure it's above other nodes
+        circle.zPosition = 100
         
-        // Position in center of playable area
         let centerY = frame.height - (frame.height - topBufferHeight) / 2
         circle.position = CGPoint(x: frame.midX, y: centerY)
-        
-        #if DEBUG
-        print("Created targeting circle at position: \(circle.position)")
-        print("Circle properties - alpha: \(circle.alpha), zPosition: \(circle.zPosition)")
-        #endif
         
         return circle
     }
@@ -2773,14 +2773,39 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         updateTargetingState(.targeted)
         
         // Move targeting circle to selected sphere immediately
-        guard let targetingCircle = targetingCircle else { return }
+        guard let targetingCircle = targetingCircle,
+              let tier = sphere.userData?["tier"] as? Int else { return }
         
-        // Get the sphere's radius
-        let sphereRadius = sphere.frame.width / 2
+        // Calculate the exact radius for this tier + scaled padding
+        let padding = calculateTargetingPadding(forTier: tier)
+        let radius = (GameScene.calculateRadius(forTier: tier) * ballScale) + padding
         
-        // Update circle position and scale immediately
+        // Create new path with exact size
+        let segments = 32
+        let segmentAngle = 2 * CGFloat.pi / CGFloat(segments)
+        let path = CGMutablePath()
+        
+        for i in 0..<segments {
+            if i % 2 == 0 {
+                let startAngle = segmentAngle * CGFloat(i)
+                let endAngle = segmentAngle * CGFloat(i + 1)
+                
+                path.move(to: CGPoint(
+                    x: radius * cos(startAngle),
+                    y: radius * sin(startAngle)
+                ))
+                path.addArc(
+                    center: .zero,
+                    radius: radius,
+                    startAngle: startAngle,
+                    endAngle: endAngle,
+                    clockwise: false
+                )
+            }
+        }
+        
+        targetingCircle.path = path
         targetingCircle.position = sphere.position
-        targetingCircle.setScale(sphereRadius / targetingCircleRadius)
         
         #if os(iOS)
         HapticManager.shared.playDropHaptic()
