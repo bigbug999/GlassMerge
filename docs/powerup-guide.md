@@ -5,12 +5,26 @@
 ### Base System
 - Power-ups can be equipped in slots at the bottom of the game screen
 - Each power-up can occupy 1-3 slots based on its level
-- Power-ups can be toggled on/off by tapping
-- Only one power-up can be active at a time
+- Power-ups are organized into three types:
+  1. Single-Use (affect next spawned ball)
+  2. Environmental (affect entire play area, duration-based)
+  3. Targeting (affect existing balls)
+- Environmental power-ups have a two-stage activation:
+  1. Prime (50% opacity border)
+  2. Active (100% opacity border)
+- Environmental power-ups have duration timers:
+  - Base duration: 10 seconds
+  - +2 seconds per level
+  - Visual countdown indicator
+  - Auto-deactivation when expired
+- Only one power-up can be active at a time per type
 - Active power-ups are indicated with colored borders:
   - Super Massive Ball: Blue
   - Negative Ball: Red
   - Magnetic Ball: Purple
+  - Low Gravity: Blue
+  - Rubber World: Green
+  - Ice World: Cyan
 - Debug logging tracks activation/deactivation states
 - Power-up states persist across game saves
 - Active power-ups are tracked per-sphere
@@ -30,14 +44,20 @@ struct PowerUp {
     var cost: Int
     var slotIndex: Int?
     var isActive: Bool = false
-    var remainingCooldown: TimeInterval = 0
+    var isPrimed: Bool = false
+    var remainingDuration: TimeInterval = 0
+}
+
+struct PowerUpStats {
+    var duration: TimeInterval?  // nil for single-use, 10s base for environmental
+    var forceMagnitude: Double   // Effect strength multiplier
 }
 ```
 
 ## Categories & Implementation Status
 
 ### 1. Gravity Category
-#### Super Massive Ball
+#### Super Massive Ball (Single-Use)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
   - [x] Add visual indicator for affected ball (blue stroke)
@@ -47,15 +67,40 @@ struct PowerUp {
   - [ ] Increase mass and downward force on release
   - [ ] Add screen shake on impact
 
-#### Low Gravity Environment
-- **Status**: Not Implemented
-- **Implementation Plan**:
+#### Low Gravity (Environmental)
+- **Status**: Partially Implemented
+- **Implementation Progress**:
+  - [x] Add duration system (10s base + 2s/level)
+  - [x] Implement two-stage activation (prime/active)
+  - [x] Add visual countdown indicator
+  - [x] Auto-deactivation when expired
   - [ ] Modify world gravity when active
   - [ ] Add visual particles/effects
   - [ ] Smooth transition between gravity states
 
-### 2. Magnetism Category
-#### Magnetic Ball
+### 2. Physics Category
+#### Rubber World (Environmental)
+- **Status**: Partially Implemented
+- **Implementation Progress**:
+  - [x] Add duration system (10s base + 2s/level)
+  - [x] Implement two-stage activation
+  - [x] Add visual countdown indicator
+  - [x] Auto-deactivation when expired
+  - [ ] Modify restitution and friction
+  - [ ] Add bounce effect visualization
+  
+#### Ice World (Environmental)
+- **Status**: Partially Implemented
+- **Implementation Progress**:
+  - [x] Add duration system (10s base + 2s/level)
+  - [x] Implement two-stage activation
+  - [x] Add visual countdown indicator
+  - [x] Auto-deactivation when expired
+  - [ ] Modify surface friction
+  - [ ] Add ice effect visualization
+
+### 3. Magnetism Category
+#### Magnetic Ball (Single-Use)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
   - [x] Add visual indicator for affected ball (purple stroke)
@@ -65,8 +110,8 @@ struct PowerUp {
   - [ ] Add magnetic field visualization
   - [ ] Handle multi-ball interactions
 
-### 3. Void Category
-#### Negative Ball
+### 4. Void Category
+#### Negative Ball (Single-Use)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
   - [x] Add visual indicator for affected ball (red stroke)
@@ -77,22 +122,17 @@ struct PowerUp {
   - [ ] Handle scoring for removed balls
 
 ## Future Enhancements
-1. **Cooldown System**
-   - Add visual cooldown indicator
-   - Implement timer-based cooldown
-   - Balance cooldown durations
-
-2. **Visual Feedback**
+1. **Visual Feedback**
    - Power-up activation effects
    - Status indicators
    - Particle effects
 
-3. **Sound & Haptics**
+2. **Sound & Haptics**
    - Unique activation sounds
    - Haptic feedback patterns
    - Environmental audio effects
 
-4. **UI Improvements**
+3. **UI Improvements**
    - Power-up tooltips
    - Status effect icons
    - Active duration indicators
@@ -100,6 +140,9 @@ struct PowerUp {
 ## Implementation Notes
 - Power-ups are implemented as value types (structs)
 - State changes are propagated through the view model
-- Each power-up can affect either:
-  - Individual balls (single-use)
-  - The entire environment (continuous effect) 
+- Power-ups are categorized by type:
+  - Single-use: Affect next spawned ball
+  - Environmental: Timed effects on play area
+  - Targeting: Affect existing balls
+- Environmental power-ups use a sophisticated duration system
+- Multiple power-up types can be active simultaneously 

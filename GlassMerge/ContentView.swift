@@ -596,17 +596,22 @@ class GameViewModel: ObservableObject {
         #if DEBUG
         print("Presenting level up choices at level \(level)")
         #endif
+        
         var choices: [PowerUpChoice] = []
-        var seenPowerUpIds = Set<UUID>()
+        var seenPowerUpNames = Set<String>() // Track by name instead of UUID
         
         // Get available new power-ups only if there are empty slots
         if hasEmptySlot {
             let availablePowerUps = powerUpManager.getAvailablePowerUps()
+                .filter { powerUp in
+                    // Filter out any power-ups that are already equipped
+                    !equippedPowerUps.contains(where: { $0?.name == powerUp.name })
+                }
             let newPowerUps = availablePowerUps.map { PowerUpChoice.new($0) }
             for choice in newPowerUps {
-                if !seenPowerUpIds.contains(choice.powerUp.id) {
+                if !seenPowerUpNames.contains(choice.powerUp.name) {
                     choices.append(choice)
-                    seenPowerUpIds.insert(choice.powerUp.id)
+                    seenPowerUpNames.insert(choice.powerUp.name)
                 }
             }
         }
@@ -615,18 +620,27 @@ class GameViewModel: ObservableObject {
         let upgradeablePowerUps = getUpgradeablePowerUps()
             .map { PowerUpChoice.upgrade($0) }
         for choice in upgradeablePowerUps {
-            if !seenPowerUpIds.contains(choice.powerUp.id) {
+            if !seenPowerUpNames.contains(choice.powerUp.name) {
                 choices.append(choice)
-                seenPowerUpIds.insert(choice.powerUp.id)
+                seenPowerUpNames.insert(choice.powerUp.name)
             }
         }
         
         // If no choices available, don't show the screen
         guard !choices.isEmpty else { return }
         
+        #if DEBUG
+        print("Available choices before shuffle: \(choices.map { $0.powerUp.name })")
+        #endif
+        
         // Shuffle and take first 3 or all if less than 3
         choices.shuffle()
         powerUpChoices = Array(choices.prefix(3))
+        
+        #if DEBUG
+        print("Selected choices after shuffle: \(powerUpChoices.map { $0.powerUp.name })")
+        #endif
+        
         isLevelUpViewPresented = true
         saveGameState() // Save upon reaching a new level
     }
@@ -689,8 +703,66 @@ class GameViewModel: ObservableObject {
         guard let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }),
               var powerUp = equippedPowerUps[index] else { return }
         
-        // Handle environmental power-ups differently
-        if powerUp.type == .environment {
+        #if DEBUG
+        print("Activating power-up: \(powerUp.name), type: \(powerUp.type), current state - isPrimed: \(powerUp.isPrimed), isActive: \(powerUp.isActive)")
+        #endif
+        
+        // Handle targeting power-ups differently
+        if powerUp.type == .targeting {
+            // If already active, deactivate it
+            if powerUp.isActive {
+                powerUp.isActive = false
+                #if DEBUG
+                print("\(powerUp.name) deactivated!")
+                #endif
+            }
+            // If primed, keep it primed (actual activation happens after targeting)
+            else if powerUp.isPrimed {
+                #if DEBUG
+                print("\(powerUp.name) already primed, waiting for target selection")
+                #endif
+                return
+            }
+            // If neither, prime it
+            else {
+                // Deactivate any other targeting power-ups first
+                for i in equippedPowerUps.indices {
+                    if var otherPowerUp = equippedPowerUps[i],
+                       otherPowerUp.id != powerUp.id,
+                       otherPowerUp.type == .targeting,
+                       (otherPowerUp.isActive || otherPowerUp.isPrimed) {
+                        otherPowerUp.isActive = false
+                        otherPowerUp.isPrimed = false
+                        #if DEBUG
+                        print("\(otherPowerUp.name) deactivated due to new priming!")
+                        #endif
+                        
+                        // Update all slots for this power up
+                        let idToUpdate = otherPowerUp.id
+                        for j in equippedPowerUps.indices {
+                            if equippedPowerUps[j]?.id == idToUpdate {
+                                equippedPowerUps[j] = otherPowerUp
+                            }
+                        }
+                    }
+                }
+                
+                powerUp.isPrimed = true
+                #if DEBUG
+                print("\(powerUp.name) primed for targeting!")
+                #endif
+            }
+            
+            // Update all slots for this power up
+            let idToUpdate = powerUp.id
+            for i in equippedPowerUps.indices {
+                if equippedPowerUps[i]?.id == idToUpdate {
+                    equippedPowerUps[i] = powerUp
+                }
+            }
+        }
+        // Handle environmental power-ups
+        else if powerUp.type == .environment {
             // If already active, do nothing (can only be deactivated by timer)
             if powerUp.isActive {
                 return
@@ -1777,6 +1849,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var gridNode: SKNode?
     private var environmentalBorder: SKShapeNode?
     
+    // MARK: - Targeting System
+    enum TargetingState {
+        case none           // No targeting active
+        case primed        // Targeting power-up is primed, showing center circle
+        case selecting     // User is selecting a target
+        case targeted      // Target selected, waiting for activation
+        case active        // Effect is active on target
+    }
+    
+    private var targetingState: TargetingState = .none
+    private var targetingPowerUp: PowerUp?
+    private var selectedTarget: SKShapeNode?
+    private var targetingCircle: SKShapeNode?
+    
     // Define power-up colors
     private let powerUpColors: [String: SKColor] = [
         // Single-use power-ups
@@ -1909,9 +1995,28 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         backgroundColor = .black
         
+        // Reset targeting state
+        targetingState = .none
+        selectedTarget = nil
+        targetingCircle?.removeFromParent()
+        targetingCircle = nil
+        
+        // Reset any active targeting power-ups
+        if let viewModel = viewModel {
+            for i in viewModel.equippedPowerUps.indices {
+                if var powerUp = viewModel.equippedPowerUps[i],
+                   powerUp.type == .targeting,
+                   (powerUp.isPrimed || powerUp.isActive) {
+                    powerUp.isPrimed = false
+                    powerUp.isActive = false
+                    viewModel.equippedPowerUps[i] = powerUp
+                }
+            }
+        }
+        
         setupGrid()
         setupDangerZone()
-        setupEnvironmentalBorder() // Add border setup
+        setupEnvironmentalBorder()
         
         // Restore spheres from saved state if available
         if let sphereStates = viewModel?.getSphereStates(), !sphereStates.isEmpty {
@@ -2167,52 +2272,85 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !isPaused, !isTransitioning, let touch = touches.first, let sphere = currentSphere else { return }
+        guard !isPaused, let touch = touches.first else { return }
         let location = touch.location(in: self)
-        sphere.position = constrainPosition(location, forSphere: sphere)
+        
+        // Handle targeting mode touches
+        if targetingState == .primed || targetingState == .targeted {
+            if let sphere = findSelectableSphere(at: location) {
+                if sphere === selectedTarget {
+                    // Second tap on the same sphere activates the power-up
+                    if let powerUp = targetingPowerUp {
+                        activateTargetingPowerUp(powerUp, on: sphere)
+                    }
+                } else {
+                    // First tap on a new sphere selects it
+                    if let currentTarget = selectedTarget {
+                        unhighlightSphere(currentTarget)
+                    }
+                    highlightSphere(sphere)
+                    selectSphere(sphere)
+                }
+            }
+            // Prevent any other touch handling during targeting mode
+            return
+        }
+        
+        // Only handle normal sphere movement if not in targeting mode
+        if !isTransitioning, let sphere = currentSphere {
+            sphere.position = constrainPosition(location, forSphere: sphere)
+        }
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !isPaused, !isTransitioning, let touch = touches.first, let sphere = currentSphere else { return }
+        guard !isPaused, let touch = touches.first else { return }
         let location = touch.location(in: self)
-        sphere.position = constrainPosition(location, forSphere: sphere)
+        
+        // Ignore touch movement during targeting mode
+        if targetingState != .none { return }
+        
+        // Only handle sphere movement in normal mode
+        if !isTransitioning, let sphere = currentSphere {
+            sphere.position = constrainPosition(location, forSphere: sphere)
+        }
     }
     
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // If no touch event or we're in a transitioning state, ignore
-        guard !isPaused, !isTransitioning, let touch = touches.first else { return }
-        
-        // If there's no current sphere, this might be the first touch after loading
-        // Just ignore it to prevent unwanted drops
-        guard let sphereToDrop = currentSphere else { return }
-        
-        isTransitioning = true
-        
+        guard !isPaused, let touch = touches.first else { return }
         let location = touch.location(in: self)
-        let constrainedPosition = constrainPosition(location, forSphere: sphereToDrop)
-        sphereToDrop.position = constrainedPosition
         
-        // Apply any active power-ups to the sphere before dropping
-        if let activePowerUp = currentActivePowerUp {
-            var activePowerUps = sphereToDrop.userData?["activePowerUps"] as? [String] ?? []
-            activePowerUps.append(activePowerUp.name)
-            sphereToDrop.userData?["activePowerUps"] = activePowerUps
-        }
+        // Ignore touch end during targeting mode
+        if targetingState != .none { return }
         
-        addPhysics(to: sphereToDrop)
-        
-        #if os(iOS)
-        HapticManager.shared.playDropHaptic()
-        #endif
-        
-        self.currentSphere = nil
-        
-        // Use the same constrained x position for spawning the next sphere
-        let spawnPosition = constrainedPosition
-        
-        // Use a slight delay to allow the dropped sphere to start falling before the next appears.
-        run(SKAction.wait(forDuration: 0.1)) { [weak self] in
-            self?.spawnNewSphere(at: spawnPosition, animated: true)
+        // Handle normal sphere drops only when not in targeting mode
+        if !isTransitioning, let sphereToDrop = currentSphere {
+            isTransitioning = true
+            
+            let constrainedPosition = constrainPosition(location, forSphere: sphereToDrop)
+            sphereToDrop.position = constrainedPosition
+            
+            // Apply any active power-ups to the sphere before dropping
+            if let activePowerUp = currentActivePowerUp {
+                var activePowerUps = sphereToDrop.userData?["activePowerUps"] as? [String] ?? []
+                activePowerUps.append(activePowerUp.name)
+                sphereToDrop.userData?["activePowerUps"] = activePowerUps
+            }
+            
+            addPhysics(to: sphereToDrop)
+            
+            #if os(iOS)
+            HapticManager.shared.playDropHaptic()
+            #endif
+            
+            self.currentSphere = nil
+            
+            // Use the same constrained x position for spawning the next sphere
+            let spawnPosition = constrainedPosition
+            
+            // Use a slight delay to allow the dropped sphere to start falling before the next appears
+            run(SKAction.wait(forDuration: 0.1)) { [weak self] in
+                self?.spawnNewSphere(at: spawnPosition, animated: true)
+            }
         }
     }
     
@@ -2272,6 +2410,65 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     override func update(_ currentTime: TimeInterval) {
         // Update environmental border state
         updateEnvironmentalBorder()
+        
+        // Update targeting circle position if we have a selected target
+        if targetingState == .targeted,
+           let selectedSphere = selectedTarget,
+           let targetingCircle = targetingCircle {
+            targetingCircle.position = selectedSphere.position
+        }
+        
+        // Update targeting state based on power-up changes
+        if let viewModel = viewModel {
+            // Clean up targeting when game is paused
+            if isPaused {
+                if targetingState != .none {
+                    exitTargetingMode()
+                    // Also reset any primed or active targeting power-ups
+                    for i in viewModel.equippedPowerUps.indices {
+                        if var powerUp = viewModel.equippedPowerUps[i],
+                           powerUp.type == .targeting,
+                           (powerUp.isPrimed || powerUp.isActive) {
+                            powerUp.isPrimed = false
+                            powerUp.isActive = false
+                            viewModel.equippedPowerUps[i] = powerUp
+                        }
+                    }
+                }
+                targetingCircle?.alpha = 0
+            } else {
+                targetingCircle?.alpha = 0.5
+            }
+            
+            let targetingPowerUp = viewModel.equippedPowerUps
+                .compactMap { $0 }
+                .first { $0.type == .targeting && ($0.isPrimed || $0.isActive) }
+            
+            #if DEBUG
+            if let powerUp = targetingPowerUp {
+                print("Found targeting power-up: \(powerUp.name), isPrimed: \(powerUp.isPrimed), isActive: \(powerUp.isActive)")
+            }
+            #endif
+            
+            if let powerUp = targetingPowerUp {
+                if powerUp.isPrimed && targetingState == .none {
+                    #if DEBUG
+                    print("Entering targeting mode...")
+                    #endif
+                    enterTargetingMode(powerUp)
+                } else if !powerUp.isPrimed && !powerUp.isActive {
+                    #if DEBUG
+                    print("Exiting targeting mode...")
+                    #endif
+                    exitTargetingMode()
+                }
+            } else if targetingState != .none {
+                #if DEBUG
+                print("No targeting power-up found, exiting targeting mode...")
+                #endif
+                exitTargetingMode()
+            }
+        }
         
         // Update current sphere appearance if power-up state changes
         if let currentSphere = currentSphere {
@@ -2388,6 +2585,263 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 }
             }
         }
+    }
+    
+    // MARK: - Targeting Methods
+    private func enterTargetingMode(_ powerUp: PowerUp) {
+        guard powerUp.type == .targeting else { return }
+        
+        targetingPowerUp = powerUp
+        targetingState = .primed
+        
+        // Show targeting circle when entering targeting mode
+        showTargetingCircle()
+        
+        #if DEBUG
+        print("Entered targeting mode with power-up: \(powerUp.name)")
+        #endif
+    }
+    
+    private func exitTargetingMode() {
+        targetingState = .none
+        targetingPowerUp = nil
+        selectedTarget = nil
+        
+        // Hide targeting circle when exiting targeting mode
+        hideTargetingCircle()
+        
+        #if DEBUG
+        print("Exited targeting mode")
+        #endif
+    }
+    
+    private func updateTargetingState(_ newState: TargetingState) {
+        let oldState = targetingState
+        targetingState = newState
+        
+        // Update targeting circle visibility based on state changes
+        switch newState {
+        case .none:
+            hideTargetingCircle()
+        case .primed:
+            if oldState == .none {
+                showTargetingCircle()
+            }
+        case .selecting, .targeted, .active:
+            // We'll handle these states when implementing targeting animation
+            break
+        }
+        
+        #if DEBUG
+        print("Targeting state updated to: \(newState)")
+        #endif
+    }
+    
+    // MARK: - Targeting Circle
+    private let targetingCircleRadius: CGFloat = 50.0
+    
+    private func createTargetingCircle() -> SKShapeNode {
+        let circle = SKShapeNode()
+        
+        // Create a dashed circle path
+        let path = CGMutablePath()
+        let radius = targetingCircleRadius
+        let segments = 32 // Number of segments in the circle
+        let segmentAngle = 2 * CGFloat.pi / CGFloat(segments)
+        
+        // Create dashed segments
+        for i in 0..<segments {
+            if i % 2 == 0 { // Draw every other segment
+                let startAngle = segmentAngle * CGFloat(i)
+                let endAngle = segmentAngle * CGFloat(i + 1)
+                
+                path.move(to: CGPoint(
+                    x: radius * cos(startAngle),
+                    y: radius * sin(startAngle)
+                ))
+                path.addArc(
+                    center: .zero,
+                    radius: radius,
+                    startAngle: startAngle,
+                    endAngle: endAngle,
+                    clockwise: false
+                )
+            }
+        }
+        
+        circle.path = path
+        
+        // Make the circle more visible
+        circle.strokeColor = SKColor.white
+        circle.lineWidth = 3.0
+        circle.alpha = 0.7
+        circle.name = "targetingCircle"
+        circle.zPosition = 100 // Ensure it's above other nodes
+        
+        // Position in center of playable area
+        let centerY = frame.height - (frame.height - topBufferHeight) / 2
+        circle.position = CGPoint(x: frame.midX, y: centerY)
+        
+        #if DEBUG
+        print("Created targeting circle at position: \(circle.position)")
+        print("Circle properties - alpha: \(circle.alpha), zPosition: \(circle.zPosition)")
+        #endif
+        
+        return circle
+    }
+    
+    private func showTargetingCircle() {
+        #if DEBUG
+        print("Showing targeting circle")
+        #endif
+        
+        // Remove existing circle if any
+        targetingCircle?.removeFromParent()
+        
+        // Create and add new circle
+        let circle = createTargetingCircle()
+        addChild(circle)
+        targetingCircle = circle
+        
+        // Add fade-in animation
+        circle.alpha = 0
+        let fadeIn = SKAction.fadeAlpha(to: 0.7, duration: 0.2)
+        circle.run(fadeIn)
+        
+        #if DEBUG
+        print("Added targeting circle to scene, running fade-in animation")
+        #endif
+    }
+    
+    private func hideTargetingCircle() {
+        guard let circle = targetingCircle else { return }
+        
+        // Add fade-out animation
+        let fadeOut = SKAction.fadeAlpha(to: 0, duration: 0.2)
+        let remove = SKAction.removeFromParent()
+        let sequence = SKAction.sequence([fadeOut, remove])
+        
+        circle.run(sequence)
+        targetingCircle = nil
+    }
+    
+    // MARK: - Sphere Selection
+    private func findSelectableSphere(at position: CGPoint) -> SKShapeNode? {
+        let touchedNodes = nodes(at: position)
+        return touchedNodes.first { node in
+            guard let sphere = node as? SKShapeNode,
+                  sphere.name == "sphere",
+                  sphere !== currentSphere else { return false }
+            return true
+        } as? SKShapeNode
+    }
+    
+    private func highlightSphere(_ sphere: SKShapeNode) {
+        // Store original stroke color if not already stored
+        if sphere.userData?["originalStrokeColor"] == nil {
+            sphere.userData?["originalStrokeColor"] = sphere.strokeColor
+        }
+        
+        // Highlight effect
+        sphere.strokeColor = .yellow
+        sphere.lineWidth = 4.0
+        
+        // Add subtle scale animation
+        let scaleUp = SKAction.scale(to: 1.1, duration: 0.1)
+        sphere.run(scaleUp)
+    }
+    
+    private func unhighlightSphere(_ sphere: SKShapeNode) {
+        // Restore original stroke color
+        if let originalColor = sphere.userData?["originalStrokeColor"] as? SKColor {
+            sphere.strokeColor = originalColor
+            sphere.lineWidth = 1.0
+        }
+        
+        // Remove scale
+        let scaleDown = SKAction.scale(to: 1.0, duration: 0.1)
+        sphere.run(scaleDown)
+    }
+    
+    private func selectSphere(_ sphere: SKShapeNode) {
+        // If we already have a selected target, unhighlight it
+        if let currentTarget = selectedTarget {
+            unhighlightSphere(currentTarget)
+        }
+        
+        selectedTarget = sphere
+        updateTargetingState(.targeted)
+        
+        // Move targeting circle to selected sphere immediately
+        guard let targetingCircle = targetingCircle else { return }
+        
+        // Get the sphere's radius
+        let sphereRadius = sphere.frame.width / 2
+        
+        // Update circle position and scale immediately
+        targetingCircle.position = sphere.position
+        targetingCircle.setScale(sphereRadius / targetingCircleRadius)
+        
+        #if os(iOS)
+        HapticManager.shared.playDropHaptic()
+        #endif
+    }
+    
+    private func deselectSphere() {
+        guard let sphere = selectedTarget else { return }
+        unhighlightSphere(sphere)
+        selectedTarget = nil
+        updateTargetingState(.primed)
+        
+        // Reset targeting circle position and scale immediately
+        guard let targetingCircle = targetingCircle else { return }
+        
+        let centerY = frame.height - (frame.height - topBufferHeight) / 2
+        targetingCircle.position = CGPoint(x: frame.midX, y: centerY)
+        targetingCircle.setScale(1.0)
+    }
+    
+    private func activateTargetingPowerUp(_ powerUp: PowerUp, on sphere: SKShapeNode) {
+        // Apply power-up effect
+        var activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
+        activePowerUps.append(powerUp.name)
+        sphere.userData?["activePowerUps"] = activePowerUps
+        
+        // Apply visual effect
+        if let color = powerUpColors[powerUp.name] {
+            sphere.strokeColor = color
+            sphere.lineWidth = 3.0
+        }
+        
+        // Clean up targeting state
+        targetingCircle?.removeFromParent()
+        targetingCircle = nil
+        selectedTarget = nil
+        targetingState = .none
+        
+        // Reset power-up state in view model
+        // First deactivate the current power-up
+        viewModel?.activatePowerUp(powerUp) // This will deactivate it since it's currently active
+        
+        // Then update all slots to ensure the power-up is fully reset
+        if let viewModel = viewModel {
+            for i in viewModel.equippedPowerUps.indices {
+                if var slotPowerUp = viewModel.equippedPowerUps[i],
+                   slotPowerUp.id == powerUp.id {
+                    slotPowerUp.isActive = false
+                    slotPowerUp.isPrimed = false
+                    viewModel.equippedPowerUps[i] = slotPowerUp
+                }
+            }
+        }
+        
+        #if os(iOS)
+        HapticManager.shared.playMergeHaptic()
+        #endif
+        
+        #if DEBUG
+        print("Activated targeting power-up: \(powerUp.name) on sphere and reset power-up state")
+        #endif
     }
 }
 

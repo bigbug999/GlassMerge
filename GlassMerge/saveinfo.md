@@ -22,7 +22,7 @@ _Last updated: 2025-06-11_
   * `score`, `level`, `xp` – current run stats (expandable)
   * `equipped : [PowerUpSave?]` – fixed-length (6) array representing each slot; `nil` = empty
   * `spheres: [SphereState]` - snapshot of all spheres in the play area with their active power-ups
-  * Note: Only one power-up can be active at a time across all equipped slots
+  * Note: Multiple power-ups can be active simultaneously if they are different types
 
 * `PowerUpProgress`
   * `id : String` – **power-up name** (stable key)
@@ -32,19 +32,62 @@ _Last updated: 2025-06-11_
   * `id : String` – power-up name
   * `level` – per-run level (mirrors permanent level at save time)
   * `slotIndex` – first slot the power-up occupies (multi-slot awareness)
-  * `isActive` – whether the power-up is currently active (only one can be true at a time)
+  * `isActive` – whether the power-up is currently active
+  * `isPrimed` – whether an environmental power-up is in primed state
+  * `remainingDuration` – time left for environmental power-ups
+  * `type` – PowerUpType (singleUse/environment/targeting)
+
+* `PowerUpStats` (not saved, computed at runtime)
+  * `duration` – base duration for environmental power-ups (nil for others)
+  * `forceMagnitude` – effect strength multiplier
 
 * `SphereState`
   * `tier` – sphere's current tier
   * `position` – sphere's current position
   * `activePowerUps` – array of power-up names currently affecting this sphere
-  * Note: Currently only stores one power-up name as only one can be active
+  * Note: Can have multiple active power-ups of different types
 
 * `MetaState` – currently `firstLaunchDate`, `totalPlayTime`; free to extend.
 
 ---
 
-## 2. Serialization
+## 2. Power-Up Types & Activation
+
+### 2.1 Power-Up Categories
+* **Single-Use** (affect next spawned ball)
+  - Super Massive Ball (Blue)
+  - Magnetic Ball (Purple)
+  - Negative Ball (Red)
+
+* **Environmental** (affect entire play area)
+  - Low Gravity (Blue)
+  - Rubber World (Green)
+  - Ice World (Cyan)
+  - Features:
+    * Two-stage activation (Prime → Active)
+    * Duration system (10s base + 2s/level)
+    * Visual countdown
+    * Auto-deactivation
+
+* **Targeting** (affect existing balls)
+  - Selective Deletion (Red 70%)
+  - Repulsion Field (Orange)
+
+### 2.2 Activation Rules
+* Environmental power-ups:
+  - Can be primed (50% opacity)
+  - When activated, run for full duration
+  - Show border effect around game area
+  - Auto-deactivate when duration expires
+  - Any new activation deactivates primed power-ups
+* Single-use and targeting power-ups:
+  - Instant activation/deactivation
+  - No duration/timer system
+* Multiple types can be active simultaneously
+
+---
+
+## 3. Serialization
 * **Codable → JSON** (human-readable while developing).
 * `SaveManager` singleton handles:
   * Background encoding on a utility queue.
@@ -54,19 +97,20 @@ _Last updated: 2025-06-11_
 
 ---
 
-## 3. Save / Load Hooks
+## 4. Save / Load Hooks
 | Event | Method | Notes |
 |-------|--------|-------|
 | Level-up choice selected | `GameViewModel.saveGameState()` | Keeps run up-to-date after each reward. |
 | Pause button tapped | `GameView.onChange(of: isPaused)` | Persists sphere positions and run state when pausing. |
 | Pause → Main Menu | `PauseMenuView.onMainMenu` | Final save before tearing down the game view. |
+| Power-up duration end | `GameViewModel.updatePowerUpTimers` | Auto-saves when environmental power-ups expire. |
 | App lifecycle (future) | SceneDelegate / `sceneWillResignActive` | Add call to `SaveManager.save` to guard against force-quit. |
 
 The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaranteeing an actual run is present.
 
 ---
 
-## 4. Extending the Schema
+## 5. Extending the Schema
 
 1. **Add new fields**
    * Simply append optional properties to any Codable struct. Older saves ignore unknown keys; new saves populate them.
@@ -92,26 +136,27 @@ The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaran
 
 ---
 
-## 5. Loading Workflow in UI
+## 6. Loading Workflow in UI
 1. Main menu checks for a valid `run` → enables _Continue_.
 2. Pressing _Continue_ reads `GameState` and injects it into `GameView`.
 3. `GameViewModel`'s initializer **synchronously** calls `applyGameState` to populate:
    * currency, unlocked status, levels
    * equipped slots (multi-slot lengths respected)
+   * power-up states (active, primed, remaining duration)
    * **Crucially, sphere positions from the previous session.**
 4. The `GameScene` is created with this fully-loaded initial state, preventing race conditions.
 5. UI updates through `@Published` bindings.
 
 ---
 
-## 6. Communication During Gameplay (Saving)
+## 7. Communication During Gameplay (Saving)
 * The `GameViewModel` holds a `sphereStateProvider` closure.
 * `SpriteKitContainer` sets this provider, giving it a reference to the `GameScene`'s `getCurrentSphereStates()` method.
 * When `saveGameState()` is called (e.g., on pause), it invokes the provider to get live sphere positions from the `SKScene` before serializing. This avoids coupling the scene directly to the view model while ensuring the most up-to-date state is saved.
 
 ---
 
-## 7. Future Ideas
+## 8. Future Ideas
 * **Cloud sync** – serialize JSON, base-64 & push to iCloud key-value store.
 * **Compression** – wrap data with `Compression` framework (e.g., LZFSE) before writing.
 * **Checksum** – append SHA-256 hash to detect corruption.
