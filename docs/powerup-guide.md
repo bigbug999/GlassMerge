@@ -60,6 +60,19 @@ struct PowerUp {
     var currentCharges: Int = 1
     var isRecharging: Bool = false
     var mergesUntilRecharge: Int = 0
+    
+    // Helper function for charge management
+    mutating func useCharge() -> Bool {
+        if currentCharges > 0 {
+            currentCharges -= 1
+            if currentCharges == 0 {
+                isRecharging = true
+                mergesUntilRecharge = 50 - (level - 1) * 10  // Level 1: 50, Level 2: 40, Level 3: 30
+            }
+            return true
+        }
+        return false
+    }
 }
 
 struct PowerUpStats {
@@ -142,16 +155,30 @@ struct PowerUpStats {
   - [ ] Add magnetic field visualization
   - [ ] Handle multi-ball interactions
 
-### 4. Void Category
-#### Negative Ball (Single-Use)
-- **Status**: Partially Implemented
+### 4. Targeting Category
+#### Targeting Power-Ups (All)
+- **Status**: ✅ Fully Implemented
 - **Implementation Progress**:
-  - [x] Add visual indicator for affected ball (red stroke)
-  - [x] Implement power-up state persistence
-  - [x] Implement single active power-up system
-  - [ ] Implement ball removal mechanics
-  - [ ] Add deletion animations
-  - [ ] Handle scoring for removed balls
+  - [x] Add charge system integration
+  - [x] Implement priming mechanics
+  - [x] Add targeting state management
+  - [x] Handle charge consumption
+  - [x] Implement recharge system
+  - [x] Add state persistence
+- **Charge System**:
+  - Each power-up starts with 1 charge
+  - Priming doesn't consume a charge
+  - Charge is consumed only on successful targeting
+  - Recharge requires merges based on level:
+    * Level 1: 50 merges
+    * Level 2: 40 merges
+    * Level 3: 30 merges
+- **Targeting Flow**:
+  1. First tap primes the power-up (blue border)
+  2. Second tap on a sphere activates the effect
+  3. Charge is consumed only on successful activation
+  4. Power-up enters recharge state if no charges remain
+  5. Other primed targeting power-ups are automatically deprimed
 
 ## Future Enhancements
 1. **Visual Feedback**

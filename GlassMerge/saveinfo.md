@@ -82,9 +82,14 @@ _Last updated: 2025-06-11_
   - Selective Deletion (Red 70%)
   - Repulsion Field (Orange)
   - Features:
-    * Charge-based system
-    * Recharge through merges
+    * Two-stage activation (Prime → Target)
+    * Charge-based system (1 charge)
+    * Priming doesn't consume charge
+    * Charge consumed only on successful targeting
+    * Recharge through merges (scales with level)
     * Tap-to-select mechanics
+    * Auto-deprime other targeting power-ups
+    * State persistence across saves
 
 ### 2.2 Activation Rules
 * Environmental power-ups:
@@ -104,6 +109,19 @@ _Last updated: 2025-06-11_
   - Level 2: 40 merges to recharge
   - Level 3: 20 merges to recharge
   - Recharge state persists in save file
+
+* Targeting power-ups:
+  - Two-stage activation:
+    1. Prime stage (first tap)
+    2. Target stage (tap on sphere)
+  - Priming is free (no charge consumed)
+  - Charge consumed only on successful targeting
+  - Auto-deprime other targeting power-ups
+  - Enter recharge state when depleted
+  - Recharge scales with level:
+    * Level 1: 50 merges
+    * Level 2: 40 merges
+    * Level 3: 30 merges
 
 ---
 
@@ -125,6 +143,8 @@ _Last updated: 2025-06-11_
 | Pause → Main Menu | `PauseMenuView.onMainMenu` | Final save before tearing down the game view. |
 | Power-up duration end | `GameViewModel.updatePowerUpTimers` | Auto-saves when environmental power-ups expire. |
 | Power-up recharge | `GameViewModel.earnScore` | Auto-saves when merges affect recharge counters. |
+| Power-up targeting | `GameScene.activateTargetingPowerUp` | Saves state after targeting power-up use |
+| Power-up priming | `GameViewModel.activatePowerUp` | Saves state when targeting power-ups are primed/deprimed |
 | App lifecycle (future) | SceneDelegate / `sceneWillResignActive` | Add call to `SaveManager.save` to guard against force-quit. |
 
 The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaranteeing an actual run is present.
