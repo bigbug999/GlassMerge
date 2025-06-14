@@ -25,6 +25,15 @@
   - Low Gravity: Blue
   - Rubber World: Green
   - Ice World: Cyan
+- Power-ups have a recharge system:
+  - Each power-up starts with 1 charge
+  - Using a power-up consumes a charge
+  - When charges are depleted, power-up enters recharge state
+  - Recharge requires a number of merges based on level:
+    * Level 1: 50 merges
+    * Level 2: 40 merges
+    * Level 3: 20 merges
+  - Recharge state persists across game saves
 - Debug logging tracks activation/deactivation states
 - Power-up states persist across game saves
 - Active power-ups are tracked per-sphere
@@ -46,6 +55,11 @@ struct PowerUp {
     var isActive: Bool = false
     var isPrimed: Bool = false
     var remainingDuration: TimeInterval = 0
+    
+    // Charge system
+    var currentCharges: Int = 1
+    var isRecharging: Bool = false
+    var mergesUntilRecharge: Int = 0
 }
 
 struct PowerUpStats {

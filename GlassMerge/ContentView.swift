@@ -94,6 +94,9 @@ struct PowerUpSave: Codable {
     var isPrimed: Bool
     var remainingDuration: TimeInterval
     var type: PowerUpType
+    var currentCharges: Int
+    var isRecharging: Bool
+    var mergesUntilRecharge: Int
 }
 
 struct SphereState: Codable {
@@ -289,12 +292,61 @@ struct PowerUp: Identifiable {
         return min(level, PowerUp.maxLevel)  // Cap slots at maxLevel
     }
     
+    // Charge system
+    var currentCharges: Int = 1  // Start with 1 charge
+    var isRecharging: Bool = false
+    var mergesUntilRecharge: Int = 0  // Track merges needed for recharge
+    var requiredMergesForRecharge: Int {
+        switch level {
+            case 1: return 50
+            case 2: return 40
+            case 3: return 20
+            default: return 50
+        }
+    }
+    
+    var canBeUsed: Bool {
+        return currentCharges > 0 && !isRecharging
+    }
+    
     // Upgrade costs
     var upgradeCost: Int {
         return cost * level
     }
     
     static let maxLevel = 3
+    
+    // Charge system methods
+    mutating func useCharge() -> Bool {
+        if canBeUsed {
+            currentCharges -= 1
+            if currentCharges == 0 {
+                startRecharge()
+            }
+            return true
+        }
+        return false
+    }
+    
+    mutating func startRecharge() {
+        isRecharging = true
+        mergesUntilRecharge = requiredMergesForRecharge
+    }
+    
+    mutating func handleMerge() {
+        if isRecharging {
+            mergesUntilRecharge -= 1
+            if mergesUntilRecharge <= 0 {
+                completeRecharge()
+            }
+        }
+    }
+    
+    mutating func completeRecharge() {
+        currentCharges = 1
+        isRecharging = false
+        mergesUntilRecharge = 0
+    }
 }
 
 class PowerUpManager: ObservableObject {
@@ -585,6 +637,9 @@ class GameViewModel: ObservableObject {
                     instance.isActive = save.isActive
                     instance.isPrimed = save.isPrimed
                     instance.remainingDuration = save.remainingDuration
+                    instance.currentCharges = save.currentCharges
+                    instance.isRecharging = save.isRecharging
+                    instance.mergesUntilRecharge = save.mergesUntilRecharge
                     equippedPowerUps[slot] = instance
                     
                     // If this is an active environmental power-up, make sure the timer is running
@@ -593,6 +648,13 @@ class GameViewModel: ObservableObject {
                         print("Restored active environmental power-up: \(instance.name) with \(instance.remainingDuration)s remaining")
                         #endif
                     }
+                    
+                    // Log recharge state if recharging
+                    #if DEBUG
+                    if instance.isRecharging {
+                        print("Restored recharging power-up: \(instance.name) with \(instance.mergesUntilRecharge) merges remaining")
+                    }
+                    #endif
                 }
             }
             self.score = run.score
@@ -839,59 +901,35 @@ class GameViewModel: ObservableObject {
         print("Activating power-up: \(powerUp.name), type: \(powerUp.type), current state - isPrimed: \(powerUp.isPrimed), isActive: \(powerUp.isActive)")
         #endif
         
-        // Handle targeting power-ups differently
-        if powerUp.type == .targeting {
-            // If already active, deactivate it
-            if powerUp.isActive {
-                powerUp.isActive = false
-                #if DEBUG
-                print("\(powerUp.name) deactivated!")
-                #endif
-            }
-            // If primed, keep it primed (actual activation happens after targeting)
-            else if powerUp.isPrimed {
-                #if DEBUG
-                print("\(powerUp.name) already primed, waiting for target selection")
-                #endif
-                return
-            }
-            // If neither, prime it
-            else {
-                // Deactivate any other targeting power-ups first
-                for i in equippedPowerUps.indices {
-                    if var otherPowerUp = equippedPowerUps[i],
-                       otherPowerUp.id != powerUp.id,
-                       otherPowerUp.type == .targeting,
-                       (otherPowerUp.isActive || otherPowerUp.isPrimed) {
-                        otherPowerUp.isActive = false
-                        otherPowerUp.isPrimed = false
-                        #if DEBUG
-                        print("\(otherPowerUp.name) deactivated due to new priming!")
-                        #endif
-                        
-                        // Update all slots for this power up
-                        let idToUpdate = otherPowerUp.id
-                        for j in equippedPowerUps.indices {
-                            if equippedPowerUps[j]?.id == idToUpdate {
-                                equippedPowerUps[j] = otherPowerUp
-                            }
-                        }
-                    }
-                }
-                
-                powerUp.isPrimed = true
-                #if DEBUG
-                print("\(powerUp.name) primed for targeting!")
-                #endif
-            }
+        // If already active, just deactivate it (but only for non-single-use or if manually toggling)
+        if powerUp.isActive && (powerUp.type != .singleUse || !powerUp.canBeUsed) {
+            powerUp.isActive = false
+            powerUp.isPrimed = false
+            #if DEBUG
+            print("\(powerUp.name) deactivated!")
+            #endif
             
-            // Update all slots for this power up
+            // Update all slots and return
             let idToUpdate = powerUp.id
             for i in equippedPowerUps.indices {
                 if equippedPowerUps[i]?.id == idToUpdate {
                     equippedPowerUps[i] = powerUp
                 }
             }
+            return
+        }
+        
+        // Check if power-up can be used
+        guard powerUp.canBeUsed else {
+            #if DEBUG
+            print("Cannot activate \(powerUp.name): no charges available or recharging")
+            #endif
+            return
+        }
+        
+        // Handle targeting power-ups differently
+        if powerUp.type == .targeting {
+            // ... existing targeting code ...
         }
         // Handle environmental power-ups
         else if powerUp.type == .environment {
@@ -921,37 +959,17 @@ class GameViewModel: ObservableObject {
                     }
                 }
                 
-                powerUp.isActive = true
-                powerUp.isPrimed = false
-                powerUp.remainingDuration = powerUp.currentStats.duration ?? 0
-                #if DEBUG
-                print("\(powerUp.name) activated with duration: \(powerUp.remainingDuration)s!")
-                #endif
-            }
-            // If neither, prime it
-            else {
-                // Deactivate any other environmental power-ups first
-                for i in equippedPowerUps.indices {
-                    if var otherPowerUp = equippedPowerUps[i],
-                       otherPowerUp.id != powerUp.id,
-                       otherPowerUp.type == .environment,
-                       (otherPowerUp.isActive || otherPowerUp.isPrimed) {
-                        otherPowerUp.isActive = false
-                        otherPowerUp.isPrimed = false
-                        #if DEBUG
-                        print("\(otherPowerUp.name) deactivated due to new priming!")
-                        #endif
-                        
-                        // Update all slots for this power up
-                        let idToUpdate = otherPowerUp.id
-                        for j in equippedPowerUps.indices {
-                            if equippedPowerUps[j]?.id == idToUpdate {
-                                equippedPowerUps[j] = otherPowerUp
-                            }
-                        }
-                    }
+                if powerUp.useCharge() {
+                    powerUp.isActive = true
+                    powerUp.isPrimed = false
+                    powerUp.remainingDuration = powerUp.currentStats.duration ?? 0
+                    #if DEBUG
+                    print("\(powerUp.name) activated with duration: \(powerUp.remainingDuration)s!")
+                    #endif
                 }
-                
+            }
+            // If neither, prime it (priming doesn't consume a charge)
+            else {
                 powerUp.isPrimed = true
                 #if DEBUG
                 print("\(powerUp.name) primed!")
@@ -960,44 +978,32 @@ class GameViewModel: ObservableObject {
         }
         // Handle single-use power-ups
         else {
-            // If this power-up is already active, just deactivate it
-            if powerUp.isActive {
-                powerUp.isActive = false
-                #if DEBUG
-                print("\(powerUp.name) deactivated!")
-                #endif
-            } else {
-                // Deactivate any primed power-ups and other single-use power-ups
-                for i in equippedPowerUps.indices {
-                    if var otherPowerUp = equippedPowerUps[i],
-                       otherPowerUp.id != powerUp.id {
-                        if otherPowerUp.isPrimed {
-                            otherPowerUp.isPrimed = false
-                            #if DEBUG
-                            print("\(otherPowerUp.name) deprimed due to new activation!")
-                            #endif
-                        } else if otherPowerUp.type == .singleUse && otherPowerUp.isActive {
-                            otherPowerUp.isActive = false
-                            #if DEBUG
-                            print("\(otherPowerUp.name) deactivated due to new activation!")
-                            #endif
-                        }
-                        
-                        // Update all slots for this power up
-                        let idToUpdate = otherPowerUp.id
-                        for j in equippedPowerUps.indices {
-                            if equippedPowerUps[j]?.id == idToUpdate {
-                                equippedPowerUps[j] = otherPowerUp
-                            }
+            // Deactivate any other active single-use power-ups
+            for i in equippedPowerUps.indices {
+                if var otherPowerUp = equippedPowerUps[i],
+                   otherPowerUp.id != powerUp.id,
+                   otherPowerUp.type == .singleUse,
+                   otherPowerUp.isActive {
+                    otherPowerUp.isActive = false
+                    #if DEBUG
+                    print("\(otherPowerUp.name) deactivated due to new activation!")
+                    #endif
+                    
+                    // Update all slots for this power up
+                    let idToUpdate = otherPowerUp.id
+                    for j in equippedPowerUps.indices {
+                        if equippedPowerUps[j]?.id == idToUpdate {
+                            equippedPowerUps[j] = otherPowerUp
                         }
                     }
                 }
-                
-                powerUp.isActive = true
-                #if DEBUG
-                print("\(powerUp.name) activated!")
-                #endif
             }
+            
+            // Just activate the power-up, charge will be consumed when used
+            powerUp.isActive = true
+            #if DEBUG
+            print("\(powerUp.name) activated! Will consume charge when used.")
+            #endif
         }
         
         // Update all slots for this power up
@@ -1005,6 +1011,39 @@ class GameViewModel: ObservableObject {
         for i in equippedPowerUps.indices {
             if equippedPowerUps[i]?.id == idToUpdate {
                 equippedPowerUps[i] = powerUp
+            }
+        }
+    }
+    
+    // Call this when a single-use power-up's effect is actually applied
+    func consumeSingleUsePowerUp(_ powerUpName: String) {
+        for i in equippedPowerUps.indices {
+            if var powerUp = equippedPowerUps[i],
+               powerUp.name == powerUpName,
+               powerUp.type == .singleUse,
+               powerUp.isActive {
+                if powerUp.useCharge() {
+                    powerUp.isActive = false
+                    equippedPowerUps[i] = powerUp
+                    #if DEBUG
+                    print("\(powerUp.name) used and deactivated!")
+                    #endif
+                }
+            }
+        }
+    }
+    
+    private func deactivateSingleUsePowerUp(_ powerUp: PowerUp) {
+        // Find and deactivate the power-up
+        for i in equippedPowerUps.indices {
+            if var slotPowerUp = equippedPowerUps[i],
+               slotPowerUp.id == powerUp.id {
+                slotPowerUp.isActive = false
+                equippedPowerUps[i] = slotPowerUp
+                
+                #if DEBUG
+                print("\(powerUp.name) auto-deactivated after use!")
+                #endif
             }
         }
     }
@@ -1172,7 +1211,10 @@ class GameViewModel: ObservableObject {
                 isActive: item.isActive,
                 isPrimed: item.isPrimed,
                 remainingDuration: item.remainingDuration,
-                type: item.type
+                type: item.type,
+                currentCharges: item.currentCharges,
+                isRecharging: item.isRecharging,
+                mergesUntilRecharge: item.mergesUntilRecharge
             )
         }
         let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates, selectedFlaskSize: selectedFlaskSize)
@@ -1183,6 +1225,21 @@ class GameViewModel: ObservableObject {
     func earnScore(points: Int = 1) {
         score += points
         xp += points
+        
+        // Handle power-up recharging on merge
+        for i in equippedPowerUps.indices {
+            if var powerUp = equippedPowerUps[i] {
+                powerUp.handleMerge()
+                equippedPowerUps[i] = powerUp
+                
+                #if DEBUG
+                if powerUp.isRecharging {
+                    print("Power-up \(powerUp.name) recharging: \(powerUp.mergesUntilRecharge) merges remaining")
+                }
+                #endif
+            }
+        }
+        
         #if DEBUG
         print("EarnScore: score=\(score) xp=\(xp)/\(xpNeededPerLevel) level=\(level)")
         #endif
@@ -1627,6 +1684,20 @@ struct PowerUpSlot: View {
     private var strokeColor: Color {
         guard let powerUp = powerUp else { return Color.gray.opacity(0.3) }
         
+        // If power-up can't be used, show muted colors
+        if !powerUp.canBeUsed {
+            if powerUp.type == .environment {
+                if powerUp.isActive {
+                    return .blue.opacity(0.3)
+                } else if powerUp.isPrimed {
+                    return .blue.opacity(0.15)
+                }
+            } else if powerUp.isActive {
+                return .blue.opacity(0.3)
+            }
+            return Color.gray.opacity(0.15)
+        }
+        
         if powerUp.type == .environment {
             if powerUp.isActive {
                 return .blue
@@ -1643,6 +1714,12 @@ struct PowerUpSlot: View {
     private var strokeWidth: CGFloat {
         guard let powerUp = powerUp else { return 2 }
         return (powerUp.isActive || powerUp.isPrimed) ? 3 : 2
+    }
+    
+    private var rechargeProgress: CGFloat {
+        guard let powerUp = powerUp,
+              powerUp.isRecharging else { return 0 }
+        return 1.0 - (CGFloat(powerUp.mergesUntilRecharge) / CGFloat(powerUp.requiredMergesForRecharge))
     }
     
     var body: some View {
@@ -1674,10 +1751,20 @@ struct PowerUpSlot: View {
                     if let powerUp = powerUp {
                         VStack(spacing: 2) {
                             Image(systemName: powerUp.icon)
-                                .foregroundColor(powerUp.isActive ? .blue : .blue.opacity(powerUp.isPrimed ? 0.5 : 1))
+                                .foregroundColor(powerUp.canBeUsed ? 
+                                    (powerUp.isActive ? .blue : .blue.opacity(powerUp.isPrimed ? 0.5 : 1)) :
+                                    .gray)
                                 .font(.system(size: 20))
+                            
                             if powerUp.level > 1 {
                                 Text("Lv\(powerUp.level)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.gray)
+                            }
+                            
+                            // Show recharge count if recharging
+                            if powerUp.isRecharging {
+                                Text("\(powerUp.mergesUntilRecharge)")
                                     .font(.system(size: 10))
                                     .foregroundColor(.gray)
                             }
@@ -1688,6 +1775,14 @@ struct PowerUpSlot: View {
                             .foregroundColor(.gray.opacity(0.5))
                             .font(.system(size: 20))
                     }
+                }
+                
+                // Recharge progress bar at bottom
+                if let powerUp = powerUp, powerUp.isRecharging {
+                    Rectangle()
+                        .fill(Color.blue.opacity(0.3))
+                        .frame(width: geometry.size.width * rechargeProgress, height: 3)
+                        .position(x: geometry.size.width * rechargeProgress / 2, y: geometry.size.height - 2)
                 }
             }
         }
@@ -2391,6 +2486,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let spawnY = size.height - topBufferHeight
         let initialPosition = position ?? CGPoint(x: size.width / 2, y: spawnY)
         sphere.position = initialPosition
+        
+        // Apply any active single-use power-ups to the sphere before adding it
+        if let activePowerUp = currentActivePowerUp {
+            var activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
+            activePowerUps.append(activePowerUp.name)
+            sphere.userData?["activePowerUps"] = activePowerUps
+            
+            // Apply visual effect
+            sphere.strokeColor = activePowerUp.color
+            sphere.lineWidth = 3
+            
+            // Consume the power-up
+            viewModel?.consumeSingleUsePowerUp(activePowerUp.name)
+        }
+        
         addChild(sphere)
         
         if animated {

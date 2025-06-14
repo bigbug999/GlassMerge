@@ -36,10 +36,14 @@ _Last updated: 2025-06-11_
   * `isPrimed` – whether an environmental power-up is in primed state
   * `remainingDuration` – time left for environmental power-ups
   * `type` – PowerUpType (singleUse/environment/targeting)
+  * `currentCharges` – number of charges remaining (starts at 1)
+  * `isRecharging` – whether power-up is in recharge state
+  * `mergesUntilRecharge` – merges needed to complete recharge
 
 * `PowerUpStats` (not saved, computed at runtime)
   * `duration` – base duration for environmental power-ups (nil for others)
   * `forceMagnitude` – effect strength multiplier
+  * `massMultiplier` – physics mass multiplier
 
 * `SphereState`
   * `tier` – sphere's current tier
@@ -58,6 +62,10 @@ _Last updated: 2025-06-11_
   - Super Massive Ball (Blue)
   - Magnetic Ball (Purple)
   - Negative Ball (Red)
+  - Features:
+    * Charge-based system (1 charge)
+    * Recharge through merges
+    * Recharge time scales with level
 
 * **Environmental** (affect entire play area)
   - Low Gravity (Blue)
@@ -68,10 +76,15 @@ _Last updated: 2025-06-11_
     * Duration system (10s base + 2s/level)
     * Visual countdown
     * Auto-deactivation
+    * Charge-based system
 
 * **Targeting** (affect existing balls)
   - Selective Deletion (Red 70%)
   - Repulsion Field (Orange)
+  - Features:
+    * Charge-based system
+    * Recharge through merges
+    * Tap-to-select mechanics
 
 ### 2.2 Activation Rules
 * Environmental power-ups:
@@ -83,7 +96,14 @@ _Last updated: 2025-06-11_
 * Single-use and targeting power-ups:
   - Instant activation/deactivation
   - No duration/timer system
+  - Consume charge on use
+  - Enter recharge state when depleted
 * Multiple types can be active simultaneously
+* Recharge system:
+  - Level 1: 50 merges to recharge
+  - Level 2: 40 merges to recharge
+  - Level 3: 20 merges to recharge
+  - Recharge state persists in save file
 
 ---
 
@@ -104,6 +124,7 @@ _Last updated: 2025-06-11_
 | Pause button tapped | `GameView.onChange(of: isPaused)` | Persists sphere positions and run state when pausing. |
 | Pause → Main Menu | `PauseMenuView.onMainMenu` | Final save before tearing down the game view. |
 | Power-up duration end | `GameViewModel.updatePowerUpTimers` | Auto-saves when environmental power-ups expire. |
+| Power-up recharge | `GameViewModel.earnScore` | Auto-saves when merges affect recharge counters. |
 | App lifecycle (future) | SceneDelegate / `sceneWillResignActive` | Add call to `SaveManager.save` to guard against force-quit. |
 
 The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaranteeing an actual run is present.
