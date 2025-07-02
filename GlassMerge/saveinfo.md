@@ -1,4 +1,4 @@
-# GlassMerge Save-System Overview
+# GlassMerge Save-System Overview (Core Data)
 
 _Last updated: 2025-06-11_
 
@@ -6,199 +6,97 @@ _Last updated: 2025-06-11_
 
 ## 1. Architecture
 
-### 1.1 Root Object
-* `GameState` (Codable)
-  * `schemaVersion` – bump on breaking changes
-  * `progression` – persistent meta-progress
-  * `run` (optional) – active run snapshot; `nil` when no run in progress
-  * `meta` – analytics / play-time data
+The game's persistence layer is built on Apple's **Core Data** framework, providing a robust and scalable solution for managing the object graph.
 
-### 1.2 Sub-Objects
-* `Progression`
-  * `currency` – player's permanent coins
-  * `powerUps : [PowerUpProgress]` – unlock + level for every catalogued power-up
+### 1.1 Core Components
+* **`CoreDataManager.swift`**: A singleton that encapsulates the entire Core Data stack. It is the single source of truth for creating, fetching, and saving game data.
+* **`GlassMerge.xcdatamodeld`**: The visual data model file that defines all entities, attributes, and relationships. Xcode uses this file to auto-generate the `NSManagedObject` subclasses.
 
-* `RunState`
-  * `score`, `level`, `xp` – current run stats (expandable)
-  * `equipped : [PowerUpSave?]` – fixed-length (6) array representing each slot; `nil` = empty
-  * `spheres: [SphereState]` - snapshot of all spheres in the play area with their active power-ups
-  * Note: Multiple power-ups can be active simultaneously if they are different types
+### 1.2 Data Model Entities
+The data model is composed of five core entities:
 
-* `PowerUpProgress`
-  * `id : String` – **power-up name** (stable key)
-  * `isUnlocked`, `level`
+* **`GameData`**: A "singleton" entity that holds all global, persistent data. There should only ever be one instance of this object in the database.
+  - `currency`: Player's permanent coins.
+  - `unlockedFlaskSizes`: A comma-separated string of unlocked flask raw values.
+  - `powerUpProgressions` (Relationship): A to-many relationship linking to all `PowerUpProgression` objects.
+  - `currentRun` (Relationship): An optional to-one relationship to a `Run` object, which exists only when a game is in progress.
 
-* `PowerUpSave`
-  * `id : String` – power-up name
-  * `level` – per-run level (mirrors permanent level at save time)
-  * `slotIndex` – first slot the power-up occupies (multi-slot awareness)
-  * `isActive` – whether the power-up is currently active
-  * `isPrimed` – whether an environmental power-up is in primed state
-  * `remainingDuration` – time left for environmental power-ups
-  * `type` – PowerUpType (singleUse/environment/targeting)
-  * `currentCharges` – number of charges remaining (starts at 1)
-  * `isRecharging` – whether power-up is in recharge state
-  * `mergesUntilRecharge` – merges needed to complete recharge
+* **`PowerUpProgression`**: Tracks the persistent state of a single power-up in the game's catalog.
+  - `id`: The name of the power-up (e.g., "Super Massive Ball").
+  - `isUnlocked`: Boolean flag for unlock status.
+  - `level`: The permanent level of the power-up.
 
-* `PowerUpStats` (not saved, computed at runtime)
-  * `duration` – base duration for environmental power-ups (nil for others)
-  * `forceMagnitude` – effect strength multiplier
-  * `massMultiplier` – physics mass multiplier
+* **`Run`**: Represents the complete state of a single game session. This object is created when a new game starts and is deleted when the run is over.
+  - `score`, `level`, `xp`: Current run statistics.
+  - `selectedFlaskSize`: The raw value of the `FlaskSize` enum for this run.
+  - `equippedPowerUps` (Relationship): A to-many relationship to the `EquippedPowerUp` objects for this run.
+  - `spheres` (Relationship): A to-many relationship to the `Sphere` objects currently in the play area.
 
-* `SphereState`
-  * `tier` – sphere's current tier
-  * `position` – sphere's current position
-  * `activePowerUps` – array of power-up names currently affecting this sphere
-  * Note: Can have multiple active power-ups of different types
+* **`EquippedPowerUp`**: A snapshot of a power-up as it exists in a power-up slot during a specific run.
+  - `id`, `level`, `slotIndex`: Basic identifying info.
+  - `isActive`, `isPrimed`, `remainingDuration`: Live state of the power-up.
+  - `currentCharges`, `isRecharging`, `mergesUntilRecharge`: State of the charge/recharge system.
 
-* `MetaState` – currently `firstLaunchDate`, `totalPlayTime`; free to extend.
+* **`Sphere`**: A snapshot of a single sphere in the play area.
+  - `tier`, `positionX`, `positionY`: Core physical properties.
+  - `activePowerUps`: A comma-separated string of power-up names affecting this sphere.
 
 ---
 
-## 2. Power-Up Types & Activation
+## 2. Core Data Operations
 
-### 2.1 Power-Up Categories
-* **Single-Use** (affect next spawned ball)
-  - Super Massive Ball (Blue)
-  - Magnetic Ball (Purple)
-  - Negative Ball (Red)
-  - Features:
-    * Charge-based system (1 charge)
-    * Recharge through merges
-    * Recharge time scales with level
+All database interactions are funneled through the `CoreDataManager`.
 
-* **Environmental** (affect entire play area)
-  - Low Gravity (Blue)
-  - Rubber World (Green)
-  - Ice World (Cyan)
-  - Features:
-    * Two-stage activation (Prime → Active)
-    * Duration system (10s base + 2s/level)
-    * Visual countdown
-    * Auto-deactivation
-    * Charge-based system
-
-* **Targeting** (affect existing balls)
-  - Selective Deletion (Red 70%)
-  - Repulsion Field (Orange)
-  - Features:
-    * Two-stage activation (Prime → Target)
-    * Charge-based system (1 charge)
-    * Priming doesn't consume charge
-    * Charge consumed only on successful targeting
-    * Recharge through merges (scales with level)
-    * Tap-to-select mechanics
-    * Auto-deprime other targeting power-ups
-    * State persistence across saves
-
-### 2.2 Activation Rules
-* Environmental power-ups:
-  - Can be primed (50% opacity)
-  - When activated, run for full duration
-  - Show border effect around game area
-  - Auto-deactivate when duration expires
-  - Any new activation deactivates primed power-ups
-* Single-use and targeting power-ups:
-  - Instant activation/deactivation
-  - No duration/timer system
-  - Consume charge on use
-  - Enter recharge state when depleted
-* Multiple types can be active simultaneously
-* Recharge system:
-  - Level 1: 50 merges to recharge
-  - Level 2: 40 merges to recharge
-  - Level 3: 20 merges to recharge
-  - Recharge state persists in save file
-
-* Targeting power-ups:
-  - Two-stage activation:
-    1. Prime stage (first tap)
-    2. Target stage (tap on sphere)
-  - Priming is free (no charge consumed)
-  - Charge consumed only on successful targeting
-  - Auto-deprime other targeting power-ups
-  - Enter recharge state when depleted
-  - Recharge scales with level:
-    * Level 1: 50 merges
-    * Level 2: 40 merges
-    * Level 3: 30 merges
+* **Fetching Data**: `CoreDataManager.shared.getGameData()` is the primary entry point. It fetches the singleton `GameData` object or creates a new one on the first launch.
+* **Saving Data**: Saving is performed by calling `CoreDataManager.shared.saveContext()`. The `GameViewModel` is responsible for updating the attributes of the managed objects before calling save.
+* **Creating a New Run**: `CoreDataManager.shared.createNewRun(selectedFlask:)` creates a new `Run` object, links it to the `GameData` object, and clears any previous run.
 
 ---
 
-## 3. Serialization
-* **Codable → JSON** (human-readable while developing).
-* `SaveManager` singleton handles:
-  * Background encoding on a utility queue.
-  * Atomic writes (`.atomic`) to avoid partial files.
-  * Debug prints in `DEBUG` builds: path + action.
-* File: `Documents/GameState.json`.
+## 3. Save / Load Hooks
+The game saves its state at critical points to ensure progress is not lost. The main trigger is `GameViewModel.saveGameState()`.
+
+| Event                  | Method / Trigger                        | Notes                                                                |
+|------------------------|-----------------------------------------|----------------------------------------------------------------------|
+| Pause Button Tapped    | `GameView.onChange(of: isPaused)`       | Persists the entire run state, including live sphere positions.      |
+| Auto-Save Timer        | `GameView.onReceive(autoSaveTimer)`     | A periodic save occurs every 10 seconds during active gameplay.      |
+| Level-Up Choice        | `GameViewModel.selectPowerUp()`         | Saves the newly acquired or upgraded power-up to the `Run` state.    |
+| Return to Main Menu    | `PauseMenuView.onMainMenu`              | Final save before the game view is torn down.                        |
+| App Backgrounding      | SceneDelegate / `sceneWillResignActive` | (Future) Add a call here to protect against force-quits.             |
+
+The **Continue** button on the main menu is enabled by checking `CoreDataManager.shared.hasActiveRun()`, which verifies if a `Run` object is associated with the main `GameData`.
 
 ---
 
-## 4. Save / Load Hooks
-| Event | Method | Notes |
-|-------|--------|-------|
-| Level-up choice selected | `GameViewModel.saveGameState()` | Keeps run up-to-date after each reward. |
-| Pause button tapped | `GameView.onChange(of: isPaused)` | Persists sphere positions and run state when pausing. |
-| Pause → Main Menu | `PauseMenuView.onMainMenu` | Final save before tearing down the game view. |
-| Power-up duration end | `GameViewModel.updatePowerUpTimers` | Auto-saves when environmental power-ups expire. |
-| Power-up recharge | `GameViewModel.earnScore` | Auto-saves when merges affect recharge counters. |
-| Power-up targeting | `GameScene.activateTargetingPowerUp` | Saves state after targeting power-up use |
-| Power-up priming | `GameViewModel.activatePowerUp` | Saves state when targeting power-ups are primed/deprimed |
-| App lifecycle (future) | SceneDelegate / `sceneWillResignActive` | Add call to `SaveManager.save` to guard against force-quit. |
+## 4. JSON to Core Data Migration
 
-The **Continue** button is enabled when `SaveManager.load()?.run != nil`, guaranteeing an actual run is present.
+A private `MigrationManager` class exists within `CoreDataManager.swift` to handle a one-time data migration from the old `GameState.json` file.
+
+* **Process**: On the first launch of this app version, the manager checks for `GameState.json`.
+* **If Found**: It decodes the JSON file, maps its contents to the new Core Data entities, saves the new objects, and then **deletes the old JSON file** to prevent future migrations.
+* **If Not Found**: It skips the migration process, which is the normal behavior after the first run.
 
 ---
 
 ## 5. Extending the Schema
 
-1. **Add new fields**
-   * Simply append optional properties to any Codable struct. Older saves ignore unknown keys; new saves populate them.
-2. **New systems**
-   * Example: Flask sizes
-     ```swift
-     struct Progression {
-         ...
-         var flasks : [FlaskSize: Bool]? // optional keeps old saves valid
-     }
-     ```
-3. **Breaking changes**
-   * When you _must_ rename/remove fields, bump `schemaVersion` and perform a lightweight migration inside `SaveManager.load()`.
-     ```swift
-     if state.schemaVersion < 2 {
-         // transform / default new fields
-     }
-     ```
-4. **Additional trigger points**
-   * Call `SaveManager.shared.save(currentState)` whenever you add meaningful, durable changes (currency spend, shop purchase, achievement unlock).
-5. **Switch to binary**
-   * Replace `JSONEncoder/Decoder` with `PropertyListEncoder` or `NSSecureCoding` if file size becomes a concern.
+Modifying the data model is straightforward with Core Data's tooling.
+
+1.  **Add/Modify Attributes**: Open `GlassMerge.xcdatamodeld` and add new attributes or entities directly in the visual editor.
+2.  **Lightweight Migration**: For simple changes (like adding a new optional attribute), Core Data can often perform an automatic, lightweight migration. Ensure this is enabled in your project settings.
+3.  **Heavy Migration**: For complex changes (renaming fields, changing data types), a full migration policy may be needed.
 
 ---
 
-## 6. Loading Workflow in UI
-1. Main menu checks for a valid `run` → enables _Continue_.
-2. Pressing _Continue_ reads `GameState` and injects it into `GameView`.
-3. `GameViewModel`'s initializer **synchronously** calls `applyGameState` to populate:
-   * currency, unlocked status, levels
-   * equipped slots (multi-slot lengths respected)
-   * power-up states (active, primed, remaining duration)
-   * **Crucially, sphere positions from the previous session.**
-4. The `GameScene` is created with this fully-loaded initial state, preventing race conditions.
-5. UI updates through `@Published` bindings.
+## 6. Loading & Saving Workflow
 
----
-
-## 7. Communication During Gameplay (Saving)
-* The `GameViewModel` holds a `sphereStateProvider` closure.
-* `SpriteKitContainer` sets this provider, giving it a reference to the `GameScene`'s `getCurrentSphereStates()` method.
-* When `saveGameState()` is called (e.g., on pause), it invokes the provider to get live sphere positions from the `SKScene` before serializing. This avoids coupling the scene directly to the view model while ensuring the most up-to-date state is saved.
-
----
-
-## 8. Future Ideas
-* **Cloud sync** – serialize JSON, base-64 & push to iCloud key-value store.
-* **Compression** – wrap data with `Compression` framework (e.g., LZFSE) before writing.
-* **Checksum** – append SHA-256 hash to detect corruption.
-* **Multiple save slots** – change `fileName` to include a slot index; expose picker UI. 
+1.  **Launch**: `ContentView` asks `CoreDataManager` for the `GameData` object.
+2.  **Continue**: If a `Run` object exists, the "Continue" button is enabled. Tapping it passes the existing `GameData` object to the `GameView`.
+3.  **New Game**: Tapping "New Game" takes the user to `RunSetupView`. When "Start Game" is tapped, `createNewRun()` is called, which sets up a fresh `Run` object in Core Data.
+4.  **ViewModel Initialization**: `GameViewModel` is initialized with the `GameData` object. It reads the properties from the `Run` and `PowerUpProgression` objects to set up its initial state.
+5.  **Gameplay Saving**: During gameplay, `GameViewModel.saveGameState()` is called. This function:
+    *   Updates the attributes of the existing `Run` managed object (score, xp, etc.).
+    *   Invokes a `sphereStateProvider` closure to get the latest sphere data from the `GameScene`.
+    *   The `GameScene` creates new `Sphere` managed objects for the current context.
+    *   The view model clears the old `Sphere` and `EquippedPowerUp` objects and attaches the new ones to the `Run`.
+    - Finally, it calls `CoreDataManager.shared.saveContext()` to commit all changes to the database. 

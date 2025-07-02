@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		2E2FDD972E15B652009DFA1C /* GlassMerge.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 2E2FDD952E15B652009DFA1C /* GlassMerge.xcdatamodeld */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		2EC24AC02DF76A5F00175406 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,6 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		2E2FDD962E15B652009DFA1C /* GlassMerge.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = GlassMerge.xcdatamodel; sourceTree = "<group>"; };
 		2EC24AB12DF76A5D00175406 /* GlassMerge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlassMerge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2EC24ABF2DF76A5F00175406 /* GlassMergeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GlassMergeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2EC24AC92DF76A5F00175406 /* GlassMergeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GlassMergeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -75,6 +80,7 @@
 		2EC24AA82DF76A5D00175406 = {
 			isa = PBXGroup;
 			children = (
+				2E2FDD952E15B652009DFA1C /* GlassMerge.xcdatamodeld */,
 				2EC24AB32DF76A5D00175406 /* GlassMerge */,
 				2EC24AC22DF76A5F00175406 /* GlassMergeTests */,
 				2EC24ACC2DF76A5F00175406 /* GlassMergeUITests */,
@@ -239,6 +245,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2E2FDD972E15B652009DFA1C /* GlassMerge.xcdatamodeld in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -607,6 +614,19 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCVersionGroup section */
+		2E2FDD952E15B652009DFA1C /* GlassMerge.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				2E2FDD962E15B652009DFA1C /* GlassMerge.xcdatamodel */,
+			);
+			currentVersion = 2E2FDD962E15B652009DFA1C /* GlassMerge.xcdatamodel */;
+			path = GlassMerge.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
 	};
 	rootObject = 2EC24AA92DF76A5D00175406 /* Project object */;
 }

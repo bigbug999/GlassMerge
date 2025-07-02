@@ -13,8 +13,8 @@
   1. Prime (50% opacity border)
   2. Active (100% opacity border)
 - Environmental power-ups have duration timers:
-  - Base duration: 10 seconds
-  - +2 seconds per level
+  - Base duration: 30 seconds
+  - +15 seconds per level
   - Visual countdown indicator
   - Auto-deactivation when expired
 - Only one power-up can be active at a time per type
@@ -115,10 +115,9 @@ struct PowerUpStats {
 #### Low Gravity (Environmental)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
-  - [x] Add duration system (10s base + 2s/level)
+  - [x] Add duration system (30s base + 15s/level)
   - [x] Implement two-stage activation (prime/active)
   - [x] Add visual countdown indicator
-  - [x] Auto-deactivation when expired
   - [ ] Modify world gravity when active
   - [ ] Add visual particles/effects
   - [ ] Smooth transition between gravity states
@@ -127,20 +126,18 @@ struct PowerUpStats {
 #### Rubber World (Environmental)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
-  - [x] Add duration system (10s base + 2s/level)
+  - [x] Add duration system (30s base + 15s/level)
   - [x] Implement two-stage activation
   - [x] Add visual countdown indicator
-  - [x] Auto-deactivation when expired
   - [ ] Modify restitution and friction
   - [ ] Add bounce effect visualization
   
 #### Ice World (Environmental)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
-  - [x] Add duration system (10s base + 2s/level)
+  - [x] Add duration system (30s base + 15s/level)
   - [x] Implement two-stage activation
   - [x] Add visual countdown indicator
-  - [x] Auto-deactivation when expired
   - [ ] Modify surface friction
   - [ ] Add ice effect visualization
 

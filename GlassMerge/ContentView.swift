@@ -8,12 +8,13 @@
 import SwiftUI
 import Foundation
 import SpriteKit
+import CoreData
 #if os(iOS)
 import UIKit
 import CoreHaptics
 #endif
 
-// MARK: - SAVE SYSTEM (embedded)
+// MARK: - DATA MODELS (NON-CODABLE)
 
 enum FlaskSize: String, Codable, CaseIterable {
     case small
@@ -49,124 +50,6 @@ enum FlaskSize: String, Codable, CaseIterable {
         case .small: return 1.0
         case .medium: return 0.75
         case .large: return 0.5
-        }
-    }
-}
-
-struct GameState: Codable {
-    var schemaVersion: Int = 1
-    var progression: Progression
-    var run: RunState?
-    var meta: MetaState
-}
-
-struct MetaState: Codable {
-    var firstLaunchDate: Date = Date()
-    var totalPlayTime: TimeInterval = 0
-}
-
-struct Progression: Codable {
-    var currency: Int
-    var powerUps: [PowerUpProgress]
-    var unlockedFlaskSizes: Set<FlaskSize> = [.small]  // Small is always unlocked
-}
-
-struct PowerUpProgress: Codable {
-    let id: String // power-up name key
-    var isUnlocked: Bool
-    var level: Int
-}
-
-struct RunState: Codable {
-    var score: Int
-    var level: Int
-    var xp: Int
-    var equipped: [PowerUpSave?]
-    var spheres: [SphereState]
-    var selectedFlaskSize: FlaskSize = .small
-}
-
-struct PowerUpSave: Codable {
-    let id: String // power-up name key
-    var level: Int
-    var slotIndex: Int
-    var isActive: Bool
-    var isPrimed: Bool
-    var remainingDuration: TimeInterval
-    var type: PowerUpType
-    var currentCharges: Int
-    var isRecharging: Bool
-    var mergesUntilRecharge: Int
-}
-
-struct SphereState: Codable {
-    var tier: Int
-    var position: CGPoint
-    var activePowerUps: [String] // Store names of active power-ups on this sphere
-    
-    enum CodingKeys: String, CodingKey {
-        case tier, position, activePowerUps
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(tier, forKey: .tier)
-        try container.encode(["x": position.x, "y": position.y], forKey: .position)
-        try container.encode(activePowerUps, forKey: .activePowerUps)
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.tier = (try? container.decode(Int.self, forKey: .tier)) ?? 1
-        let posDict = try container.decode([String: CGFloat].self, forKey: .position)
-        self.position = CGPoint(x: posDict["x"] ?? 0, y: posDict["y"] ?? 0)
-        self.activePowerUps = (try? container.decode([String].self, forKey: .activePowerUps)) ?? []
-    }
-    
-    init(tier: Int, position: CGPoint, activePowerUps: [String] = []) {
-        self.tier = tier
-        self.position = position
-        self.activePowerUps = activePowerUps
-    }
-}
-
-final class SaveManager {
-    static let shared = SaveManager()
-    private init() {}
-
-    private let fileName = "GameState.json"
-
-    private var saveURL: URL {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent(fileName)
-    }
-
-    func save(_ state: GameState) {
-        DispatchQueue.global(qos: .background).async { [url = saveURL] in
-            do {
-                let data = try JSONEncoder().encode(state)
-                try data.write(to: url, options: .atomic)
-                #if DEBUG
-                print("[SaveManager] Saved game to \(url.path)")
-                #endif
-            } catch {
-                assertionFailure("Failed to save game state: \(error)")
-            }
-        }
-    }
-
-    func load() -> GameState? {
-        guard FileManager.default.fileExists(atPath: saveURL.path) else { return nil }
-        do {
-            let data = try Data(contentsOf: saveURL)
-            let state = try JSONDecoder().decode(GameState.self, from: data)
-            #if DEBUG
-            print("[SaveManager] Loaded game from \(saveURL.path)")
-            #endif
-            return state
-        } catch {
-            print("Failed to load game state: \(error)")
-            return nil
         }
     }
 }
@@ -215,11 +98,11 @@ struct PowerUpStats {
             
         // Environmental power-ups (all need duration)
         case "Low Gravity":
-            return PowerUpStats(duration: 10, forceMagnitude: 0.5)
+            return PowerUpStats(duration: 30, forceMagnitude: 0.5)
         case "Rubber World":
-            return PowerUpStats(duration: 10, forceMagnitude: 1.5)
+            return PowerUpStats(duration: 30, forceMagnitude: 1.5)
         case "Ice World":
-            return PowerUpStats(duration: 10, forceMagnitude: 0.1)
+            return PowerUpStats(duration: 30, forceMagnitude: 0.1)
             
         default:
             return PowerUpStats(duration: nil, forceMagnitude: 1.0)
@@ -229,9 +112,9 @@ struct PowerUpStats {
     func scaled(to level: Int) -> PowerUpStats {
         var stats = self
         
-        // Duration increases by 2 seconds per level for environment effects
+        // Duration increases by 15 seconds per level for environment effects
         if let duration = stats.duration {
-            stats.duration = duration + (Double(level - 1) * 2)
+            stats.duration = 30 + (Double(level - 1) * 15)
         }
         
         // Special scaling for Super Massive Ball
@@ -440,14 +323,35 @@ class PowerUpManager: ObservableObject {
     
     // Game currency and progression
     @Published var currency: Int = 0
-    @Published var progression = Progression(
-        currency: 0,
-        powerUps: [],
-        unlockedFlaskSizes: Set(FlaskSize.allCases) // Unlock all flask sizes by default
-    )
+    private var gameData: GameData?
     
     // Track which power-ups have been offered in this run
     private var offeredPowerUps = Set<UUID>()
+
+    init() {
+        self.gameData = CoreDataManager.shared.getGameData()
+        self.loadProgression()
+    }
+
+    private func loadProgression() {
+        guard let gameData = self.gameData else { return }
+        
+        self.currency = Int(gameData.currency)
+        
+        let progressions = gameData.powerUpProgressions as? Set<PowerUpProgression> ?? []
+        for progression in progressions {
+            if let index = powerUps.firstIndex(where: { $0.name == progression.id }) {
+                powerUps[index].isUnlocked = progression.isUnlocked
+                powerUps[index].level = Int(progression.level)
+            }
+        }
+    }
+
+    func getUnlockedFlaskSizes() -> Set<FlaskSize> {
+        guard let rawSizes = gameData?.unlockedFlaskSizes else { return [.small] }
+        let sizeStrings = rawSizes.split(separator: ",").map(String.init)
+        return Set(sizeStrings.compactMap(FlaskSize.init))
+    }
     
     // Reset offered power-ups (call this when starting a new run)
     func resetOfferedPowerUps() {
@@ -473,33 +377,47 @@ class PowerUpManager: ObservableObject {
     // MARK: - Power-up Management
     
     func unlock(_ powerUp: PowerUp) -> Bool {
-        guard !powerUp.isUnlocked && currency >= powerUp.cost else { return false }
+        guard let gameData = gameData, !powerUp.isUnlocked && currency >= powerUp.cost else { return false }
         currency -= powerUp.cost
-        progression.currency = currency
+        gameData.currency = Int64(currency)
+
         if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
             powerUps[index].isUnlocked = true
-            return true
+            // Also update the Core Data progression
+            if let progression = (gameData.powerUpProgressions as? Set<PowerUpProgression>)?.first(where: { $0.id == powerUp.name }) {
+                progression.isUnlocked = true
+            }
         }
-        return false
+        CoreDataManager.shared.saveContext()
+        return true
     }
     
     func unlockFlaskSize(_ size: FlaskSize) -> Bool {
-        guard !progression.unlockedFlaskSizes.contains(size) && currency >= size.cost else { return false }
+        guard let gameData = gameData, !getUnlockedFlaskSizes().contains(size) && currency >= size.cost else { return false }
         currency -= size.cost
-        progression.currency = currency
-        progression.unlockedFlaskSizes.insert(size)
+        gameData.currency = Int64(currency)
+        
+        var currentSizes = getUnlockedFlaskSizes()
+        currentSizes.insert(size)
+        gameData.unlockedFlaskSizes = currentSizes.map { $0.rawValue }.joined(separator: ",")
+        
+        CoreDataManager.shared.saveContext()
         return true
     }
     
     func upgrade(_ powerUp: PowerUp) -> Bool {
-        guard powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && currency >= powerUp.upgradeCost else { return false }
+        guard let gameData = gameData, powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && currency >= powerUp.upgradeCost else { return false }
         currency -= powerUp.upgradeCost
-        progression.currency = currency
+        gameData.currency = Int64(currency)
+
         if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
             powerUps[index].level += 1
-            return true
+             if let progression = (gameData.powerUpProgressions as? Set<PowerUpProgression>)?.first(where: { $0.id == powerUp.name }) {
+                progression.level = Int64(powerUps[index].level)
+            }
         }
-        return false
+        CoreDataManager.shared.saveContext()
+        return true
     }
     
     func activate(_ powerUp: PowerUp) -> Bool {
@@ -524,8 +442,8 @@ class GameViewModel: ObservableObject {
     @Published var selectedFlaskSize: FlaskSize = .small
     let xpNeededPerLevel: Int = 10  // Changed from 30 to 10 for testing
     let powerUpManager: PowerUpManager
-    @Published private var sphereStates: [SphereState] = []
-    var sphereStateProvider: (() -> [SphereState])?
+    private var run: Run?
+    var sphereStateProvider: (() -> [Sphere])?
     private var powerUpTimer: Timer?
     
     // Define a type to represent either a new power-up or an upgrade
@@ -555,11 +473,14 @@ class GameViewModel: ObservableObject {
         }
     }
     
-    init(powerUpManager: PowerUpManager, restore state: GameState? = nil) {
+    init(powerUpManager: PowerUpManager, gameData: GameData) {
         self.powerUpManager = powerUpManager
-        if let state = state {
-            self.applyGameState(state)
+        self.run = gameData.currentRun
+        
+        if let run = self.run {
+            self.applyRunState(run)
         }
+        
         startPowerUpTimer()
     }
     
@@ -612,60 +533,52 @@ class GameViewModel: ObservableObject {
         }
     }
     
-    private func applyGameState(_ state: GameState) {
-        // Restore progression
-        powerUpManager.currency = state.progression.currency
-        powerUpManager.progression = state.progression
+    private func applyRunState(_ run: Run) {
+        // Restore run state
+        self.score = Int(run.score)
+        self.xp = Int(run.xp)
+        self.level = Int(run.level)
+        self.selectedFlaskSize = FlaskSize(rawValue: run.selectedFlaskSize ?? "small") ?? .small
+        
+        // Restore equipped power-ups
+        equippedPowerUps = Array(repeating: nil, count: 6)
+        if let equipped = run.equippedPowerUps as? Set<EquippedPowerUp> {
+            for savedPowerUp in equipped {
+                guard let basePowerUp = powerUpManager.powerUps.first(where: { $0.name == savedPowerUp.id }) else { continue }
+                var instance = basePowerUp
+                instance.level = Int(savedPowerUp.level)
+                instance.slotIndex = Int(savedPowerUp.slotIndex)
+                instance.isActive = savedPowerUp.isActive
+                instance.isPrimed = savedPowerUp.isPrimed
+                instance.remainingDuration = savedPowerUp.remainingDuration
+                instance.currentCharges = Int(savedPowerUp.currentCharges)
+                instance.isRecharging = savedPowerUp.isRecharging
+                instance.mergesUntilRecharge = Int(savedPowerUp.mergesUntilRecharge)
+                
+                let slotIndex = Int(savedPowerUp.slotIndex)
+                if slotIndex >= 0 && slotIndex < equippedPowerUps.count {
+                     equippedPowerUps[slotIndex] = instance
+                }
 
-        // Restore power-up progression
-        for progress in state.progression.powerUps {
-            if let index = powerUpManager.powerUps.firstIndex(where: { $0.name == progress.id }) {
-                powerUpManager.powerUps[index].isUnlocked = progress.isUnlocked
-                powerUpManager.powerUps[index].level = progress.level
-            }
-        }
-
-        // Restore equipped power-ups and run state
-        if let run = state.run {
-            equippedPowerUps = Array(repeating: nil, count: 6)
-            for (slot, save) in run.equipped.enumerated() {
-                guard let save = save else { continue }
-                if let base = powerUpManager.powerUps.first(where: { $0.name == save.id }) {
-                    var instance = base
-                    instance.level = save.level
-                    instance.slotIndex = save.slotIndex
-                    instance.isActive = save.isActive
-                    instance.isPrimed = save.isPrimed
-                    instance.remainingDuration = save.remainingDuration
-                    instance.currentCharges = save.currentCharges
-                    instance.isRecharging = save.isRecharging
-                    instance.mergesUntilRecharge = save.mergesUntilRecharge
-                    equippedPowerUps[slot] = instance
-                    
-                    // If this is an active environmental power-up, make sure the timer is running
-                    if instance.type == .environment && instance.isActive && instance.remainingDuration > 0 {
-                        #if DEBUG
-                        print("Restored active environmental power-up: \(instance.name) with \(instance.remainingDuration)s remaining")
-                        #endif
-                    }
-                    
-                    // Log recharge state if recharging
+                // If this is an active environmental power-up, make sure the timer is running
+                if instance.type == .environment && instance.isActive && instance.remainingDuration > 0 {
                     #if DEBUG
-                    if instance.isRecharging {
-                        print("Restored recharging power-up: \(instance.name) with \(instance.mergesUntilRecharge) merges remaining")
-                    }
+                    print("Restored active environmental power-up: \(instance.name) with \(instance.remainingDuration)s remaining")
                     #endif
                 }
+                
+                // Log recharge state if recharging
+                #if DEBUG
+                if instance.isRecharging {
+                    print("Restored recharging power-up: \(instance.name) with \(instance.mergesUntilRecharge) merges remaining")
+                }
+                #endif
             }
-            self.score = run.score
-            self.xp = run.xp
-            self.level = run.level
-            self.sphereStates = run.spheres
-            self.selectedFlaskSize = run.selectedFlaskSize
-            #if DEBUG
-            print("GameViewModel: Restored \(run.spheres.count) sphere states from save")
-            #endif
         }
+
+        #if DEBUG
+        print("GameViewModel: Restored from Core Data Run object.")
+        #endif
     }
     
     private func hasEnoughSlotsForUpgrade(_ powerUp: PowerUp) -> Bool {
@@ -1024,7 +937,13 @@ class GameViewModel: ObservableObject {
                powerUp.isActive {
                 if powerUp.useCharge() {
                     powerUp.isActive = false
-                    equippedPowerUps[i] = powerUp
+                    // Update all slots for this power-up
+                    let idToUpdate = powerUp.id
+                    for j in equippedPowerUps.indices {
+                        if equippedPowerUps[j]?.id == idToUpdate {
+                            equippedPowerUps[j] = powerUp
+                        }
+                    }
                     #if DEBUG
                     print("\(powerUp.name) used and deactivated!")
                     #endif
@@ -1186,40 +1105,55 @@ class GameViewModel: ObservableObject {
     }
     
     // MARK: - Saving
-    func saveGameState(fromScene: Bool = true) {
-        if fromScene, let provider = sphereStateProvider {
-            self.sphereStates = provider()
+    func saveGameState() {
+        guard let run = self.run else { return }
+
+        // Update run stats
+        run.score = Int64(score)
+        run.level = Int64(level)
+        run.xp = Int64(xp)
+        run.selectedFlaskSize = selectedFlaskSize.rawValue
+
+        // Update sphere states
+        if let provider = sphereStateProvider {
+            let currentSphereStates = provider()
+            // Clear old spheres
+            if let existingSpheres = run.spheres {
+                run.removeFromSpheres(existingSpheres)
+            }
+            // Add new spheres
+            run.addToSpheres(NSSet(array: currentSphereStates))
         }
-        let gameState = makeGameState()
-        SaveManager.shared.save(gameState)
-    }
-    
-    private func makeGameState() -> GameState {
-        // Build Progression
-        let progressEntries = powerUpManager.powerUps.map { powerUp in
-            PowerUpProgress(id: powerUp.name, isUnlocked: powerUp.isUnlocked, level: powerUp.level)
-        }
-        let progression = Progression(currency: powerUpManager.currency, powerUps: progressEntries, unlockedFlaskSizes: powerUpManager.progression.unlockedFlaskSizes)
         
-        // Build RunState with equipped power-ups
-        let equipped: [PowerUpSave?] = equippedPowerUps.enumerated().map { index, item in
-            guard let item = item else { return nil }
-            return PowerUpSave(
-                id: item.name,
-                level: item.level,
-                slotIndex: item.slotIndex ?? index,
-                isActive: item.isActive,
-                isPrimed: item.isPrimed,
-                remainingDuration: item.remainingDuration,
-                type: item.type,
-                currentCharges: item.currentCharges,
-                isRecharging: item.isRecharging,
-                mergesUntilRecharge: item.mergesUntilRecharge
-            )
+        // Update equipped powerups
+        if let existingEquipped = run.equippedPowerUps {
+            run.removeFromEquippedPowerUps(existingEquipped)
         }
-        let run = RunState(score: score, level: level, xp: xp, equipped: equipped, spheres: sphereStates, selectedFlaskSize: selectedFlaskSize)
         
-        return GameState(progression: progression, run: run, meta: MetaState())
+        let context = CoreDataManager.shared.context
+        var equippedToSave: [EquippedPowerUp] = []
+        for (index, powerUp) in equippedPowerUps.enumerated() {
+            guard let powerUp = powerUp else { continue }
+            
+            let equipped = EquippedPowerUp(context: context)
+            equipped.id = powerUp.name
+            equipped.level = Int64(powerUp.level)
+            equipped.slotIndex = Int64(powerUp.slotIndex ?? index)
+            equipped.isActive = powerUp.isActive
+            equipped.isPrimed = powerUp.isPrimed
+            equipped.remainingDuration = powerUp.remainingDuration
+            equipped.type = powerUp.type.rawValue
+            equipped.currentCharges = Int64(powerUp.currentCharges)
+            equipped.isRecharging = powerUp.isRecharging
+            equipped.mergesUntilRecharge = Int64(powerUp.mergesUntilRecharge)
+            equippedToSave.append(equipped)
+        }
+        run.addToEquippedPowerUps(NSSet(array: equippedToSave))
+
+        CoreDataManager.shared.saveContext()
+        #if DEBUG
+        print("[CoreData] Game state saved.")
+        #endif
     }
     
     func earnScore(points: Int = 1) {
@@ -1253,19 +1187,24 @@ class GameViewModel: ObservableObject {
         }
     }
     
-    func getSphereStates() -> [SphereState]? {
+    func getSphereStates() -> [Sphere]? {
+        guard let spheres = run?.spheres as? Set<Sphere>, !spheres.isEmpty else { return nil }
         #if DEBUG
-        print("GameViewModel: getSphereStates called, has \(sphereStates.count) states")
+        print("GameViewModel: getSphereStates called, has \(spheres.count) states")
         #endif
-        return sphereStates.isEmpty ? nil : sphereStates
+        return Array(spheres)
     }
     
-    func saveSphereStates(_ states: [SphereState]) {
+    func saveSphereStates(_ states: [Sphere]) {
         #if DEBUG
         print("GameViewModel: Saving \(states.count) sphere states")
         #endif
-        sphereStates = states
-        saveGameState(fromScene: false)
+        guard let run = run else { return }
+        if let existing = run.spheres {
+            run.removeFromSpheres(existing)
+        }
+        run.addToSpheres(NSSet(array: states))
+        saveGameState()
     }
     
     func reset() {
@@ -1276,7 +1215,11 @@ class GameViewModel: ObservableObject {
         powerUpChoices = []
         hasReroll = true
         isLevelUpViewPresented = false
-        sphereStates = []
+        if let run = self.run {
+             CoreDataManager.shared.context.delete(run)
+             CoreDataManager.shared.saveContext()
+        }
+        self.run = nil
         selectedFlaskSize = .small
         powerUpManager.resetOfferedPowerUps() // Reset offered power-ups when starting new game
     }
@@ -1284,7 +1227,7 @@ class GameViewModel: ObservableObject {
 
 struct ContentView: View {
     @State private var currentScreen: GameScreen = .mainMenu
-    @State private var loadedState: GameState? = nil
+    @State private var gameData: GameData? = nil
     
     enum GameScreen {
         case mainMenu
@@ -1301,12 +1244,19 @@ struct ContentView: View {
                 switch currentScreen {
                 case .mainMenu:
                     MainMenuView(currentScreen: $currentScreen, onNewGame: {
-                        loadedState = nil
+                        gameData = CoreDataManager.shared.getGameData()
+                        // If a run exists, it will be cleared in RunSetupView/createNewRun
                     }, onContinue: {
-                        loadedState = SaveManager.shared.load()
+                        gameData = CoreDataManager.shared.getGameData()
                     })
                 case .game:
-                    GameView(currentScreen: $currentScreen, restore: loadedState)
+                    // Ensure we have gameData before starting a game
+                    if let gameData = gameData {
+                         GameView(currentScreen: $currentScreen, gameData: gameData)
+                    } else {
+                        // Fallback to main menu if gameData is nil
+                        MainMenuView(currentScreen: $currentScreen, onNewGame: {}, onContinue: {})
+                    }
                 case .upgradeShop:
                     UpgradeShopView(currentScreen: $currentScreen)
                 case .collection:
@@ -1314,8 +1264,9 @@ struct ContentView: View {
                 case .settings:
                     SettingsView(currentScreen: $currentScreen)
                 case .runSetup:
-                    RunSetupView(currentScreen: $currentScreen, onGameStart: { state in
-                        loadedState = state
+                    RunSetupView(currentScreen: $currentScreen, onGameStart: { newRun in
+                        // The run is already part of gameData, just need to trigger the view update
+                         gameData = CoreDataManager.shared.getGameData()
                     })
                 }
             }
@@ -1327,7 +1278,7 @@ struct ContentView: View {
 
 struct MainMenuView: View {
     @Binding var currentScreen: ContentView.GameScreen
-    @State private var hasSave: Bool = SaveManager.shared.load()?.run != nil
+    @State private var hasSave: Bool = CoreDataManager.shared.hasActiveRun()
     var onNewGame: (() -> Void)? = nil
     var onContinue: (() -> Void)? = nil
     
@@ -1369,7 +1320,7 @@ struct MainMenuView: View {
             .padding()
         }
         .onAppear {
-            hasSave = SaveManager.shared.load()?.run != nil
+            hasSave = CoreDataManager.shared.hasActiveRun()
         }
     }
 }
@@ -1378,7 +1329,7 @@ struct RunSetupView: View {
     @Binding var currentScreen: ContentView.GameScreen
     @StateObject private var powerUpManager = PowerUpManager()
     @State private var selectedFlaskSize: FlaskSize = .small
-    let onGameStart: (GameState) -> Void
+    let onGameStart: (Run) -> Void
     
     var body: some View {
         VStack(spacing: 20) {
@@ -1405,7 +1356,7 @@ struct RunSetupView: View {
                     FlaskSizeOption(
                         flaskSize: size,
                         isSelected: selectedFlaskSize == size,
-                        isUnlocked: size == .small || powerUpManager.progression.unlockedFlaskSizes.contains(size),
+                        isUnlocked: size == .small || powerUpManager.getUnlockedFlaskSizes().contains(size),
                         onSelect: {
                             selectedFlaskSize = size
                         }
@@ -1417,29 +1368,9 @@ struct RunSetupView: View {
             Spacer()
             
             Button("Start Game") {
-                // Create initial game state
-                let progression = Progression(
-                    currency: powerUpManager.currency,
-                    powerUps: powerUpManager.powerUps.map { PowerUpProgress(id: $0.name, isUnlocked: $0.isUnlocked, level: $0.level) },
-                    unlockedFlaskSizes: powerUpManager.progression.unlockedFlaskSizes
-                )
-                
-                let run = RunState(
-                    score: 0,
-                    level: 1,
-                    xp: 0,
-                    equipped: Array(repeating: nil, count: 6),
-                    spheres: [],
-                    selectedFlaskSize: selectedFlaskSize
-                )
-                
-                let gameState = GameState(
-                    progression: progression,
-                    run: run,
-                    meta: MetaState()
-                )
-                
-                onGameStart(gameState)
+                // Create a new run in Core Data
+                let newRun = CoreDataManager.shared.createNewRun(selectedFlask: selectedFlaskSize)
+                onGameStart(newRun)
                 currentScreen = .game
             }
             .buttonStyle(.borderedProminent)
@@ -1504,11 +1435,11 @@ struct GameView: View {
     // Add auto-save timer
     private let autoSaveTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     
-    init(currentScreen: Binding<ContentView.GameScreen>, restore state: GameState? = nil) {
+    init(currentScreen: Binding<ContentView.GameScreen>, gameData: GameData) {
         self._currentScreen = currentScreen
         let manager = PowerUpManager()
         self._powerUpManager = StateObject(wrappedValue: manager)
-        self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager, restore: state))
+        self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager, gameData: gameData))
     }
     
     var body: some View {
@@ -2324,7 +2255,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Restore spheres from saved state if available
         if let sphereStates = viewModel?.getSphereStates(), !sphereStates.isEmpty {
             for state in sphereStates {
-                if let sphere = createAndPlaceSphere(at: state.position, tier: state.tier, activePowerUps: state.activePowerUps) {
+                let position = CGPoint(x: state.positionX, y: state.positionY)
+                let activePowerUps = state.activePowerUps?.split(separator: ",").map(String.init) ?? []
+                if let sphere = createAndPlaceSphere(at: position, tier: Int(state.tier), activePowerUps: activePowerUps) {
                     // Make restored spheres immediately "live" for the danger zone
                     sphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
                 }
@@ -2672,20 +2605,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
     
-    func getCurrentSphereStates() -> [SphereState] {
-        let states = children.compactMap { node -> SphereState? in
-            guard let sphere = node as? SKShapeNode,
-                  sphere.name == "sphere",
-                  let tier = sphere.userData?["tier"] as? Int else { return nil }
+    func getCurrentSphereStates() -> [Sphere] {
+        let context = CoreDataManager.shared.context
+        let states = children.compactMap { node -> Sphere? in
+            guard let sphereNode = node as? SKShapeNode,
+                  sphereNode.name == "sphere",
+                  let tier = sphereNode.userData?["tier"] as? Int else { return nil }
+            
+            let sphereEntity = Sphere(context: context)
+            sphereEntity.tier = Int64(tier)
+            sphereEntity.positionX = sphereNode.position.x
+            sphereEntity.positionY = sphereNode.position.y
             
             // Get active power-ups for this sphere
-            let activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
+            let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String] ?? []
+            sphereEntity.activePowerUps = activePowerUps.joined(separator: ",")
             
-            return SphereState(
-                tier: tier,
-                position: sphere.position,
-                activePowerUps: activePowerUps
-            )
+            return sphereEntity
         }
         return states
     }

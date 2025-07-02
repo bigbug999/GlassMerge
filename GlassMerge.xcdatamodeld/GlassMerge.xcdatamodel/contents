@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="NO" userDefinedModelVersionIdentifier="">
+    <entity name="GameData" representedClassName="GameData" syncable="YES" codeGenerationType="class">
+        <attribute name="currency" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="firstLaunchDate" optional="YES" attributeType="Date" usesScalarValueType="NO" syncable="YES"/>
+        <attribute name="totalPlayTime" optional="YES" attributeType="Double" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="unlockedFlaskSizes" optional="YES" attributeType="String" syncable="YES"/>
+        <relationship name="currentRun" optional="YES" toMany="NO" maxCount="1" deletionRule="Nullify" destinationEntity="Run" inverseName="gameData" inverseEntity="Run" syncable="YES"/>
+        <relationship name="powerUpProgressions" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="PowerUpProgression" inverseName="gameData" inverseEntity="PowerUpProgression" syncable="YES"/>
+    </entity>
+    <entity name="PowerUpProgression" representedClassName="PowerUpProgression" syncable="YES" codeGenerationType="class">
+        <attribute name="id" optional="YES" attributeType="String" syncable="YES"/>
+        <attribute name="isUnlocked" optional="YES" attributeType="Boolean" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="level" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <relationship name="gameData" optional="YES" toMany="NO" maxCount="1" deletionRule="Nullify" destinationEntity="GameData" inverseName="powerUpProgressions" inverseEntity="GameData" syncable="YES"/>
+    </entity>
+    <entity name="Run" representedClassName="Run" syncable="YES" codeGenerationType="class">
+        <attribute name="level" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="score" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="selectedFlaskSize" optional="YES" attributeType="String" syncable="YES"/>
+        <attribute name="xp" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <relationship name="equippedPowerUps" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="EquippedPowerUp" inverseName="run" inverseEntity="EquippedPowerUp" syncable="YES"/>
+        <relationship name="gameData" optional="YES" toMany="NO" maxCount="1" deletionRule="Nullify" destinationEntity="GameData" inverseName="currentRun" inverseEntity="GameData" syncable="YES"/>
+        <relationship name="spheres" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Sphere" inverseName="run" inverseEntity="Sphere" syncable="YES"/>
+    </entity>
+    <entity name="EquippedPowerUp" representedClassName="EquippedPowerUp" syncable="YES" codeGenerationType="class">
+        <attribute name="currentCharges" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="id" optional="YES" attributeType="String" syncable="YES"/>
+        <attribute name="isActive" optional="YES" attributeType="Boolean" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="isPrimed" optional="YES" attributeType="Boolean" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="isRecharging" optional="YES" attributeType="Boolean" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="level" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="mergesUntilRecharge" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="remainingDuration" optional="YES" attributeType="Double" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="slotIndex" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="type" optional="YES" attributeType="String" syncable="YES"/>
+        <relationship name="run" optional="YES" toMany="NO" maxCount="1" deletionRule="Nullify" destinationEntity="Run" inverseName="equippedPowerUps" inverseEntity="Run" syncable="YES"/>
+    </entity>
+    <entity name="Sphere" representedClassName="Sphere" syncable="YES" codeGenerationType="class">
+        <attribute name="activePowerUps" optional="YES" attributeType="String" syncable="YES"/>
+        <attribute name="positionX" optional="YES" attributeType="Double" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="positionY" optional="YES" attributeType="Double" usesScalarValueType="YES" syncable="YES"/>
+        <attribute name="tier" optional="YES" attributeType="Integer 64" usesScalarValueType="YES" syncable="YES"/>
+        <relationship name="run" optional="YES" toMany="NO" maxCount="1" deletionRule="Nullify" destinationEntity="Run" inverseName="spheres" inverseEntity="Run" syncable="YES"/>
+    </entity>
+</model>
