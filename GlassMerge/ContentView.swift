@@ -98,11 +98,11 @@ struct PowerUpStats {
             
         // Environmental power-ups (all need duration)
         case "Low Gravity":
-            return PowerUpStats(duration: 30, forceMagnitude: 0.5)
+            return PowerUpStats(duration: 60, forceMagnitude: 0.5)
         case "Rubber World":
-            return PowerUpStats(duration: 30, forceMagnitude: 1.5)
+            return PowerUpStats(duration: 60, forceMagnitude: 1.5)
         case "Ice World":
-            return PowerUpStats(duration: 30, forceMagnitude: 0.1)
+            return PowerUpStats(duration: 60, forceMagnitude: 0.1)
             
         default:
             return PowerUpStats(duration: nil, forceMagnitude: 1.0)
@@ -111,11 +111,6 @@ struct PowerUpStats {
     
     func scaled(to level: Int) -> PowerUpStats {
         var stats = self
-        
-        // Duration increases by 15 seconds per level for environment effects
-        if stats.duration != nil {
-            stats.duration = 30 + (Double(level - 1) * 15)
-        }
         
         // Special scaling for Super Massive Ball
         if stats.massMultiplier > 1.0 {  // This identifies Super Massive Ball
@@ -134,17 +129,25 @@ struct PowerUpStats {
             default:
                 break
             }
-        } else if duration != nil && abs(forceMagnitude - 0.1) < 0.001 { // This identifies Ice World
-            // New scaling for Ice World: lower friction is better
-            switch level {
-            case 1:
-                stats.forceMagnitude = 0.1 // Default friction
-            case 2:
-                stats.forceMagnitude = 0.05 // More slippery
-            case 3:
-                stats.forceMagnitude = 0.01 // Ultra slippery
-            default:
-                break
+        } else if duration != nil { // This identifies all environmental power-ups
+             if abs(forceMagnitude - 0.1) < 0.001 { // This identifies Ice World
+                // New scaling for Ice World: lower friction is better
+                switch level {
+                case 1:
+                    stats.forceMagnitude = 0.1 // Default friction
+                case 2:
+                    stats.forceMagnitude = 0.05 // More slippery
+                case 3:
+                    stats.forceMagnitude = 0.01 // Ultra slippery
+                default:
+                    break
+                }
+            }
+            // For other environmental power-ups like Low Gravity and Rubber World,
+            // we will apply scaling only to their forceMagnitude, not duration.
+            else {
+                 let levelMultiplier = Double(level - 1) * 0.25
+                 stats.forceMagnitude += levelMultiplier
             }
         } else {
             // Normal scaling for other power-ups
@@ -213,8 +216,11 @@ struct PowerUp: Identifiable {
     
     // Charge system methods
     mutating func useCharge() -> Bool {
-        if canBeUsed {
+        if currentCharges > 0 {
             currentCharges -= 1
+            isRecharging = false // Stop recharging if we use a charge
+            mergesUntilRecharge = 0
+
             if currentCharges == 0 {
                 startRecharge()
             }
@@ -882,10 +888,10 @@ class GameViewModel: ObservableObject {
                 return
             }
 
-            // Check if power-up can be used
-            guard powerUp.canBeUsed else {
+            // Check if power-up can be used by checking charges directly
+            guard powerUp.currentCharges > 0 else {
                 #if DEBUG
-                print("Cannot activate \(powerUp.name): no charges available or recharging")
+                print("Cannot activate \(powerUp.name): no charges available.")
                 #endif
                 return
             }
@@ -2111,6 +2117,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var dangerStartTime: TimeInterval?
     private var gridNode: SKNode?
     private var environmentalBorder: SKShapeNode?
+    private var previouslyActiveEnvironmentalPowerUpName: String?
     
     // MARK: - Targeting System
     enum TargetingState {
@@ -2157,7 +2164,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // Update the border color method
     private func updateEnvironmentalBorder() {
-        if let powerUp = getActiveEnvironmentalPowerUp() {
+        let activeEnvironmentalPowerUp = getActiveEnvironmentalPowerUp()
+        let activePowerUpName = activeEnvironmentalPowerUp?.name
+
+        // Check if Rubber World was just deactivated
+        if previouslyActiveEnvironmentalPowerUpName == "Rubber World" && activePowerUpName != "Rubber World" {
+            applyCalmDownEffect()
+        }
+        
+        if let powerUp = activeEnvironmentalPowerUp {
             let color = getEnvironmentalColor(for: powerUp.name)
             environmentalBorder?.strokeColor = color
             
@@ -2190,6 +2205,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             resetRubberWorldEffect()
             resetIceWorldEffect()
         }
+
+        // Store the current active power-up name for the next frame
+        previouslyActiveEnvironmentalPowerUpName = activePowerUpName
     }
     
     // Helper for checking primed or active environmental power-ups
@@ -3379,6 +3397,43 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         #if DEBUG
         print("Resetting Ice World effect")
         #endif
+    }
+    
+    private func applyCalmDownEffect() {
+        #if DEBUG
+        print("Applying calm down effect after Rubber World deactivation.")
+        #endif
+
+        let highDamping: CGFloat = 5.0
+        let duration: TimeInterval = 1.5
+
+        // Apply high damping to all spheres
+        enumerateChildNodes(withName: "sphere") { node, _ in
+            if let body = node.physicsBody {
+                body.linearDamping = highDamping
+                body.angularDamping = highDamping
+            }
+        }
+
+        // Schedule the reset of damping to default values
+        run(SKAction.wait(forDuration: duration)) { [weak self] in
+            #if DEBUG
+            print("Restoring normal damping after calm down effect.")
+            #endif
+            self?.enumerateChildNodes(withName: "sphere") { node, _ in
+                if let body = node.physicsBody {
+                    if let sphereNode = node as? SKShapeNode,
+                       let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
+                       activePowerUps.contains("Super Massive Ball") {
+                        body.linearDamping = 0.05
+                        body.angularDamping = 0.05
+                    } else {
+                        body.linearDamping = 0.1
+                        body.angularDamping = 0.1
+                    }
+                }
+            }
+        }
     }
 }
 
