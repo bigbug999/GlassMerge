@@ -575,7 +575,12 @@ class GameViewModel: ObservableObject {
                 
                 let slotIndex = Int(savedPowerUp.slotIndex)
                 if slotIndex >= 0 && slotIndex < equippedPowerUps.count {
-                     equippedPowerUps[slotIndex] = instance
+                    for i in 0..<instance.slotsOccupied {
+                        let currentSlot = slotIndex + i
+                        if currentSlot < equippedPowerUps.count {
+                            equippedPowerUps[currentSlot] = instance
+                        }
+                    }
                 }
 
                 // If this is an active environmental power-up, make sure the timer is running
@@ -1048,30 +1053,56 @@ class GameViewModel: ObservableObject {
         // Calculate how many slots we need
         let slotsNeeded = upgradedPowerUp.slotsOccupied
         
-        // Check if we have enough consecutive slots without overwriting other power-ups
+        // Find the best position for the upgraded power-up
         var availableSlots: [Int] = []
         var consecutiveSlots = 0
-        var bestStartIndex = startIndex
+        var bestStartIndex = -1 // Use -1 to indicate no suitable position found yet
         var maxConsecutiveSlots = 0
-        
-        // First, try to find slots around the current position
+
         for i in 0..<equippedPowerUps.count {
             if equippedPowerUps[i] == nil || equippedPowerUps[i]?.id == powerUp.id {
                 consecutiveSlots += 1
                 availableSlots.append(i)
-                
-                if consecutiveSlots > maxConsecutiveSlots {
-                    maxConsecutiveSlots = consecutiveSlots
-                    bestStartIndex = i - (consecutiveSlots - 1)
-                }
             } else {
                 consecutiveSlots = 0
-                availableSlots = []
+                availableSlots.removeAll()
             }
-            
-            // If we found enough slots, break
-            if consecutiveSlots >= slotsNeeded {
-                break
+
+            if consecutiveSlots > maxConsecutiveSlots {
+                maxConsecutiveSlots = consecutiveSlots
+                // The start index of this consecutive block
+                bestStartIndex = i - consecutiveSlots + 1
+            }
+        }
+        
+        // We only need a block that is large enough
+        if maxConsecutiveSlots < slotsNeeded {
+            #if DEBUG
+            print("❌ Not enough consecutive slots available for upgrade!")
+            #endif
+            return
+        }
+        
+        // Now we have a valid starting position, update the powerUp
+        upgradedPowerUp.slotIndex = bestStartIndex
+        upgradedPowerUp.isActive = powerUp.isActive // Preserve active state during upgrade
+        
+        // Clear only the slots that were occupied by this power-up
+        for index in instances {
+            // This seems complex, let's simplify. Let's just clear ALL old instances.
+            clearSlotsForPowerUp(startingAt: index)
+        }
+        for i in equippedPowerUps.indices {
+            if equippedPowerUps[i]?.id == powerUp.id {
+                equippedPowerUps[i] = nil
+            }
+        }
+
+        // Place upgraded version in consecutive slots starting at the best position
+        for i in 0..<slotsNeeded {
+            let slotIndex = bestStartIndex + i
+            if slotIndex < equippedPowerUps.count {
+                equippedPowerUps[slotIndex] = upgradedPowerUp
             }
         }
         
@@ -1082,30 +1113,6 @@ class GameViewModel: ObservableObject {
         print("- Slots needed: \(slotsNeeded)")
         print("- Best start index: \(bestStartIndex)")
         print("- Max consecutive slots: \(maxConsecutiveSlots)")
-        #endif
-        
-        // Check if we found enough consecutive slots
-        guard maxConsecutiveSlots >= slotsNeeded else {
-            #if DEBUG
-            print("❌ Not enough consecutive slots available for upgrade!")
-            #endif
-            return
-        }
-        
-        // Clear only the slots that were occupied by this power-up
-        for index in instances {
-            clearSlotsForPowerUp(startingAt: index)
-        }
-        
-        // Place upgraded version in consecutive slots starting at the best position
-        for i in 0..<slotsNeeded {
-            let slotIndex = bestStartIndex + i
-            if slotIndex < equippedPowerUps.count {
-                equippedPowerUps[slotIndex] = upgradedPowerUp
-            }
-        }
-        
-        #if DEBUG
         print("✅ Power-up upgraded successfully")
         print("Current slot state:")
         for (index, slot) in equippedPowerUps.enumerated() {
@@ -1180,8 +1187,11 @@ class GameViewModel: ObservableObject {
         
         let context = CoreDataManager.shared.context
         var equippedToSave: [EquippedPowerUp] = []
+        var savedPowerUpIDs = Set<UUID>() // To avoid saving the same power-up multiple times
         for (index, powerUp) in equippedPowerUps.enumerated() {
-            guard let powerUp = powerUp else { continue }
+            guard let powerUp = powerUp, !savedPowerUpIDs.contains(powerUp.id) else { continue }
+            
+            savedPowerUpIDs.insert(powerUp.id)
             
             let equipped = EquippedPowerUp(context: context)
             equipped.id = powerUp.name
