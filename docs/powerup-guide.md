@@ -9,9 +9,7 @@
   1. Single-Use (affect next spawned ball)
   2. Environmental (affect entire play area, duration-based)
   3. Targeting (affect existing balls)
-- Environmental power-ups have a two-stage activation:
-  1. Prime (50% opacity border)
-  2. Active (100% opacity border)
+- Environmental power-ups now have a single-tap activation.
 - Environmental power-ups have duration timers:
   - Base duration: 30 seconds
   - +15 seconds per level
@@ -116,7 +114,7 @@ struct PowerUpStats {
 - **Status**: Partially Implemented
 - **Implementation Progress**:
   - [x] Add duration system (30s base + 15s/level)
-  - [x] Implement two-stage activation (prime/active)
+  - [x] Implement single-tap activation
   - [x] Add visual countdown indicator
   - [ ] Modify world gravity when active
   - [ ] Add visual particles/effects
@@ -124,19 +122,23 @@ struct PowerUpStats {
 
 ### 2. Physics Category
 #### Rubber World (Environmental)
-- **Status**: Partially Implemented
+- **Status**: ✅ Fully Implemented
 - **Implementation Progress**:
   - [x] Add duration system (30s base + 15s/level)
-  - [x] Implement two-stage activation
+  - [x] Implement single-tap activation
   - [x] Add visual countdown indicator
-  - [ ] Modify restitution and friction
-  - [ ] Add bounce effect visualization
+  - [x] Modify restitution and friction
+  - [x] Add bounce effect visualization
+- **Level Scaling**:
+  - Level 1: Restitution = 0.8
+  - Level 2: Restitution = 0.9
+  - Level 3: Restitution = 1.0
   
 #### Ice World (Environmental)
 - **Status**: Partially Implemented
 - **Implementation Progress**:
   - [x] Add duration system (30s base + 15s/level)
-  - [x] Implement two-stage activation
+  - [x] Implement single-tap activation
   - [x] Add visual countdown indicator
   - [ ] Modify surface friction
   - [ ] Add ice effect visualization

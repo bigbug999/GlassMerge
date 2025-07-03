@@ -113,7 +113,7 @@ struct PowerUpStats {
         var stats = self
         
         // Duration increases by 15 seconds per level for environment effects
-        if let duration = stats.duration {
+        if stats.duration != nil {
             stats.duration = 30 + (Double(level - 1) * 15)
         }
         
@@ -850,42 +850,37 @@ class GameViewModel: ObservableObject {
             if powerUp.isActive {
                 return
             }
-            // If primed, activate it
-            else if powerUp.isPrimed {
-                // Deactivate any primed power-ups
-                for i in equippedPowerUps.indices {
-                    if var otherPowerUp = equippedPowerUps[i],
-                       otherPowerUp.id != powerUp.id,
-                       otherPowerUp.isPrimed {
-                        otherPowerUp.isPrimed = false
-                        #if DEBUG
-                        print("\(otherPowerUp.name) deprimed due to new activation!")
-                        #endif
-                        
-                        // Update all slots for this power up
-                        let idToUpdate = otherPowerUp.id
-                        for j in equippedPowerUps.indices {
-                            if equippedPowerUps[j]?.id == idToUpdate {
-                                equippedPowerUps[j] = otherPowerUp
-                            }
+
+            // Deactivate any other active environmental power-ups
+            for i in equippedPowerUps.indices {
+                if var otherPowerUp = equippedPowerUps[i],
+                   otherPowerUp.id != powerUp.id,
+                   otherPowerUp.type == .environment,
+                   otherPowerUp.isActive {
+                    otherPowerUp.isActive = false
+                    otherPowerUp.isPrimed = false // also reset primed state just in case
+                    
+                    // Update all slots for this other power-up
+                    let idToUpdate = otherPowerUp.id
+                    for j in equippedPowerUps.indices {
+                        if equippedPowerUps[j]?.id == idToUpdate {
+                            equippedPowerUps[j] = otherPowerUp
                         }
                     }
-                }
-                
-                if powerUp.useCharge() {
-                    powerUp.isActive = true
-                    powerUp.isPrimed = false
-                    powerUp.remainingDuration = powerUp.currentStats.duration ?? 0
+                    
                     #if DEBUG
-                    print("\(powerUp.name) activated with duration: \(powerUp.remainingDuration)s!")
+                    print("\(otherPowerUp.name) deactivated due to new environmental activation!")
                     #endif
                 }
             }
-            // If neither, prime it (priming doesn't consume a charge)
-            else {
-                powerUp.isPrimed = true
+
+            // Activate the selected power-up
+            if powerUp.useCharge() {
+                powerUp.isActive = true
+                powerUp.isPrimed = false // No more priming
+                powerUp.remainingDuration = powerUp.currentStats.duration ?? 0
                 #if DEBUG
-                print("\(powerUp.name) primed!")
+                print("\(powerUp.name) activated with duration: \(powerUp.remainingDuration)s!")
                 #endif
             }
         }
@@ -1617,26 +1612,21 @@ struct PowerUpSlot: View {
         
         // If power-up can't be used, show muted colors
         if !powerUp.canBeUsed {
-            if powerUp.type == .environment {
-                if powerUp.isActive {
-                    return .blue.opacity(0.3)
-                } else if powerUp.isPrimed {
-                    return .blue.opacity(0.15)
-                }
-            } else if powerUp.isActive {
+            if powerUp.isActive {
                 return .blue.opacity(0.3)
+            }
+            if powerUp.isPrimed { // For targeting power-ups
+                return .blue.opacity(0.15)
             }
             return Color.gray.opacity(0.15)
         }
         
-        if powerUp.type == .environment {
-            if powerUp.isActive {
-                return .blue
-            } else if powerUp.isPrimed {
-                return .blue.opacity(0.5)
-            }
-        } else if powerUp.isActive {
+        if powerUp.isActive {
             return .blue
+        }
+        
+        if powerUp.isPrimed { // For targeting power-ups
+            return .blue.opacity(0.5)
         }
         
         return Color.gray.opacity(0.3)
@@ -1649,8 +1639,10 @@ struct PowerUpSlot: View {
     
     private var rechargeProgress: CGFloat {
         guard let powerUp = powerUp,
-              powerUp.isRecharging else { return 0 }
-        return 1.0 - (CGFloat(powerUp.mergesUntilRecharge) / CGFloat(powerUp.requiredMergesForRecharge))
+              powerUp.isRecharging,
+              powerUp.requiredMergesForRecharge > 0 else { return 0 }
+        let progress = 1.0 - (CGFloat(powerUp.mergesUntilRecharge) / CGFloat(powerUp.requiredMergesForRecharge))
+        return max(0.0, min(1.0, progress)) // Clamp progress between 0 and 1
     }
     
     var body: some View {
@@ -2112,41 +2104,43 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     // Environmental power-up colors with opacity variants
-    private func getEnvironmentalColor(for powerUpName: String, isPrimed: Bool) -> SKColor {
-        guard let baseColor = powerUpColors[powerUpName] else {
-            return isPrimed ? SKColor(Color.blue.opacity(0.5)) : SKColor(Color.blue)
-        }
-        return isPrimed ? baseColor.withAlphaComponent(0.5) : baseColor
+    private func getEnvironmentalColor(for powerUpName: String) -> SKColor {
+        return powerUpColors[powerUpName] ?? SKColor(Color.blue)
     }
     
     // Update the border color method
     private func updateEnvironmentalBorder() {
-        if let (isPrimed, isActive, powerUpName) = getEnvironmentalPowerUpState() {
-            let color = getEnvironmentalColor(for: powerUpName, isPrimed: isPrimed)
-            environmentalBorder?.strokeColor = isActive ? color : (isPrimed ? color.withAlphaComponent(0.5) : .clear)
+        if let powerUp = getActiveEnvironmentalPowerUp() {
+            let color = getEnvironmentalColor(for: powerUp.name)
+            environmentalBorder?.strokeColor = color
             
-            // Apply Low Gravity effect when active
-            if powerUpName == "Low Gravity" && isActive {
+            // Apply environmental physics effects
+            switch powerUp.name {
+            case "Low Gravity":
+                resetRubberWorldEffect()
                 applyLowGravityEffect()
-            } else if powerUpName == "Low Gravity" && !isActive {
-                // Reset gravity when Low Gravity is deactivated
+            case "Rubber World":
+                // Reset other environmental effects first
                 physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+                applyRubberWorldEffect()
+            default:
+                // Reset all environmental effects if an unknown one is active
+                physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+                resetRubberWorldEffect()
             }
         } else {
             environmentalBorder?.strokeColor = .clear
-            // Reset gravity when no environmental power-up is active
+            // Reset all environmental effects
             physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+            resetRubberWorldEffect()
         }
     }
     
     // Helper for checking primed or active environmental power-ups
-    private func getEnvironmentalPowerUpState() -> (isPrimed: Bool, isActive: Bool, name: String)? {
-        guard let environmentalPowerUp = viewModel?.equippedPowerUps
+    private func getActiveEnvironmentalPowerUp() -> PowerUp? {
+        return viewModel?.equippedPowerUps
             .compactMap({ $0 })
-            .first(where: { $0.type == .environment && ($0.isPrimed || $0.isActive) })
-        else { return nil }
-        
-        return (environmentalPowerUp.isPrimed, environmentalPowerUp.isActive, environmentalPowerUp.name)
+            .first(where: { $0.type == .environment && $0.isActive })
     }
     
     // Get the active power-up that should affect the current ball
@@ -2897,6 +2891,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             body.mass = baseMass * massMultiplier * ballScale
         }
         
+        // Handle Rubber World effect for all balls
+        if let powerUp = getActiveEnvironmentalPowerUp(), powerUp.name == "Rubber World" {
+            let newRestitution: CGFloat
+            
+            switch powerUp.level {
+            case 1: newRestitution = 0.8
+            case 2: newRestitution = 0.9
+            case 3: newRestitution = 1.0
+            default: newRestitution = 0.8
+            }
+            body.restitution = newRestitution
+        }
+        
         sphere.physicsBody = body
         sphere.userData?["creationTime"] = Date().timeIntervalSinceReferenceDate
     }
@@ -3240,6 +3247,55 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         // Apply the modified gravity
         physicsWorld.gravity = CGVector(dx: 0, dy: newGravity)
+    }
+    
+    private func applyRubberWorldEffect() {
+        guard let powerUp = getActiveEnvironmentalPowerUp(), powerUp.name == "Rubber World" else { return }
+        
+        let newRestitution: CGFloat
+        
+        switch powerUp.level {
+        case 1:
+            newRestitution = 0.8
+        case 2:
+            newRestitution = 0.9
+        case 3:
+            newRestitution = 1.0
+        default:
+            newRestitution = 0.8
+        }
+        
+        // Update walls
+        self.physicsBody?.restitution = newRestitution
+        
+        // Update existing spheres
+        enumerateChildNodes(withName: "sphere") { node, _ in
+            node.physicsBody?.restitution = newRestitution
+        }
+        
+        #if DEBUG
+        print("Applying Rubber World effect: Level \(powerUp.level), Restitution: \(newRestitution)")
+        #endif
+    }
+    
+    private func resetRubberWorldEffect() {
+        // Reset walls to default
+        self.physicsBody?.restitution = 0.2
+        
+        // Reset existing spheres to their defaults
+        enumerateChildNodes(withName: "sphere") { node, _ in
+            if let sphereNode = node as? SKShapeNode,
+               let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
+               activePowerUps.contains("Super Massive Ball") {
+                node.physicsBody?.restitution = 0.3 // Super Massive Ball restitution
+            } else {
+                node.physicsBody?.restitution = 0.1 // Default sphere restitution
+            }
+        }
+        
+        #if DEBUG
+        print("Resetting Rubber World effect")
+        #endif
     }
 }
 
