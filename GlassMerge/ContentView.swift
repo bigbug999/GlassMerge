@@ -2500,20 +2500,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let initialPosition = position ?? CGPoint(x: size.width / 2, y: spawnY)
         sphere.position = initialPosition
         
-        // Apply any active single-use power-ups to the sphere before adding it
-        if let activePowerUp = currentActivePowerUp {
-            var activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
-            activePowerUps.append(activePowerUp.name)
-            sphere.userData?["activePowerUps"] = activePowerUps
-            
-            // Apply visual effect
-            sphere.strokeColor = activePowerUp.color
-            sphere.lineWidth = 3
-            
-            // Consume the power-up
-            viewModel?.consumeSingleUsePowerUp(activePowerUp.name)
-        }
-        
         addChild(sphere)
         
         if animated {
@@ -2665,6 +2651,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 var activePowerUps = sphereToDrop.userData?["activePowerUps"] as? [String] ?? []
                 activePowerUps.append(activePowerUp.name)
                 sphereToDrop.userData?["activePowerUps"] = activePowerUps
+                viewModel?.consumeSingleUsePowerUp(activePowerUp.name)
             }
             
             addPhysics(to: sphereToDrop)
