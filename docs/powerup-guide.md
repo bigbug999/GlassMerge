@@ -10,6 +10,7 @@
   2. Environmental (affect entire play area, duration-based)
   3. Targeting (affect existing balls)
 - Environmental power-ups now have a single-tap activation.
+- Targeting power-ups still use the two-stage priming system (prime → activate).
 - Environmental power-ups have duration timers:
   - Base duration: 30 seconds
   - +15 seconds per level

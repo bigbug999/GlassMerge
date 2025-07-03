@@ -826,40 +826,67 @@ class GameViewModel: ObservableObject {
         print("Activating power-up: \(powerUp.name), type: \(powerUp.type), current state - isPrimed: \(powerUp.isPrimed), isActive: \(powerUp.isActive)")
         #endif
         
-        // If already active, just deactivate it (but only for non-single-use or if manually toggling)
-        if powerUp.isActive && (powerUp.type != .singleUse || !powerUp.canBeUsed) {
-            powerUp.isActive = false
-            powerUp.isPrimed = false
-            #if DEBUG
-            print("\(powerUp.name) deactivated!")
-            #endif
-            
-            // Update all slots and return
-            let idToUpdate = powerUp.id
-            for i in equippedPowerUps.indices {
-                if equippedPowerUps[i]?.id == idToUpdate {
-                    equippedPowerUps[i] = powerUp
-                }
-            }
-            return
-        }
-        
-        // Check if power-up can be used
-        guard powerUp.canBeUsed else {
-            #if DEBUG
-            print("Cannot activate \(powerUp.name): no charges available or recharging")
-            #endif
-            return
-        }
-        
         // Handle targeting power-ups differently
         if powerUp.type == .targeting {
-            // ... existing targeting code ...
+            // If already active, deactivate it
+            if powerUp.isActive {
+                powerUp.isActive = false
+                powerUp.isPrimed = false
+                #if DEBUG
+                print("\(powerUp.name) deactivated!")
+                #endif
+            }
+            // If primed, activate it (consume charge)
+            else if powerUp.isPrimed {
+                if powerUp.useCharge() {
+                    powerUp.isActive = true
+                    powerUp.isPrimed = false
+                    #if DEBUG
+                    print("\(powerUp.name) activated!")
+                    #endif
+                }
+            }
+            // If neither, prime it (priming doesn't consume a charge)
+            else {
+                // Deprime any other targeting power-ups
+                for i in equippedPowerUps.indices {
+                    if var otherPowerUp = equippedPowerUps[i],
+                       otherPowerUp.id != powerUp.id,
+                       otherPowerUp.type == .targeting,
+                       otherPowerUp.isPrimed {
+                        otherPowerUp.isPrimed = false
+                        #if DEBUG
+                        print("\(otherPowerUp.name) deprimed due to new targeting activation!")
+                        #endif
+                        
+                        // Update all slots for this other power-up
+                        let idToUpdate = otherPowerUp.id
+                        for j in equippedPowerUps.indices {
+                            if equippedPowerUps[j]?.id == idToUpdate {
+                                equippedPowerUps[j] = otherPowerUp
+                            }
+                        }
+                    }
+                }
+                
+                powerUp.isPrimed = true
+                #if DEBUG
+                print("\(powerUp.name) primed!")
+                #endif
+            }
         }
         // Handle environmental power-ups
         else if powerUp.type == .environment {
             // If already active, do nothing (can only be deactivated by timer)
             if powerUp.isActive {
+                return
+            }
+
+            // Check if power-up can be used
+            guard powerUp.canBeUsed else {
+                #if DEBUG
+                print("Cannot activate \(powerUp.name): no charges available or recharging")
+                #endif
                 return
             }
 
@@ -898,6 +925,14 @@ class GameViewModel: ObservableObject {
         }
         // Handle single-use power-ups
         else {
+            // Check if power-up can be used
+            guard powerUp.canBeUsed else {
+                #if DEBUG
+                print("Cannot activate \(powerUp.name): no charges available or recharging")
+                #endif
+                return
+            }
+            
             // Deactivate any other active single-use power-ups
             for i in equippedPowerUps.indices {
                 if var otherPowerUp = equippedPowerUps[i],
