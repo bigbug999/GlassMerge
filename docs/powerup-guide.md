@@ -130,18 +130,22 @@ struct PowerUpStats {
   - [x] Modify restitution and friction
   - [x] Add bounce effect visualization
 - **Level Scaling**:
-  - Level 1: Restitution = 0.8
-  - Level 2: Restitution = 0.9
-  - Level 3: Restitution = 1.0
+  - Level 1: Restitution = 0.7
+  - Level 2: Restitution = 0.8
+  - Level 3: Restitution = 0.9
   
 #### Ice World (Environmental)
-- **Status**: Partially Implemented
+- **Status**: ✅ Fully Implemented
 - **Implementation Progress**:
   - [x] Add duration system (30s base + 15s/level)
   - [x] Implement single-tap activation
   - [x] Add visual countdown indicator
-  - [ ] Modify surface friction
-  - [ ] Add ice effect visualization
+  - [x] Modify surface friction
+  - [x] Add ice effect visualization
+- **Level Scaling**:
+  - Level 1: Friction = 0.1
+  - Level 2: Friction = 0.05
+  - Level 3: Friction = 0.01
 
 ### 3. Magnetism Category
 #### Magnetic Ball (Single-Use)

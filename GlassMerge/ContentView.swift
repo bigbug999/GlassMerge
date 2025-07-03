@@ -134,6 +134,18 @@ struct PowerUpStats {
             default:
                 break
             }
+        } else if duration != nil && abs(forceMagnitude - 0.1) < 0.001 { // This identifies Ice World
+            // New scaling for Ice World: lower friction is better
+            switch level {
+            case 1:
+                stats.forceMagnitude = 0.1 // Default friction
+            case 2:
+                stats.forceMagnitude = 0.05 // More slippery
+            case 3:
+                stats.forceMagnitude = 0.01 // Ultra slippery
+            default:
+                break
+            }
         } else {
             // Normal scaling for other power-ups
             let levelMultiplier = Double(level - 1) * 0.25
@@ -2118,21 +2130,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             switch powerUp.name {
             case "Low Gravity":
                 resetRubberWorldEffect()
+                resetIceWorldEffect()
                 applyLowGravityEffect()
             case "Rubber World":
                 // Reset other environmental effects first
                 physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+                resetIceWorldEffect()
                 applyRubberWorldEffect()
+            case "Ice World":
+                // Reset other environmental effects first
+                physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
+                resetRubberWorldEffect()
+                applyIceWorldEffect()
             default:
                 // Reset all environmental effects if an unknown one is active
                 physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
                 resetRubberWorldEffect()
+                resetIceWorldEffect()
             }
         } else {
             environmentalBorder?.strokeColor = .clear
             // Reset all environmental effects
             physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
             resetRubberWorldEffect()
+            resetIceWorldEffect()
         }
     }
     
@@ -2840,7 +2861,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
            activePowerUps.contains("Super Massive Ball") {
             // Super Massive Ball specific physics properties
             body.restitution = 0.3  // More bouncy
-            body.friction = 0.02    // Less friction
+            body.friction = 0.15    // Less friction, increased from 0.1
             body.linearDamping = 0.05  // Much less air resistance
             body.angularDamping = 0.05
             
@@ -2881,7 +2902,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         } else {
             // Normal ball physics properties
             body.restitution = 0.1
-            body.friction = 0.05
+            body.friction = 0.4 // Increased from 0.3
             body.linearDamping = 0.1
             body.angularDamping = 0.1
             
@@ -2896,12 +2917,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let newRestitution: CGFloat
             
             switch powerUp.level {
-            case 1: newRestitution = 0.8
-            case 2: newRestitution = 0.9
-            case 3: newRestitution = 1.0
-            default: newRestitution = 0.8
+            case 1: newRestitution = 0.7
+            case 2: newRestitution = 0.8
+            case 3: newRestitution = 0.9
+            default: newRestitution = 0.7
             }
             body.restitution = newRestitution
+        }
+        
+        // Handle Ice World effect for all balls
+        if let powerUp = getActiveEnvironmentalPowerUp(), powerUp.name == "Ice World" {
+            let newFriction = CGFloat(powerUp.currentStats.forceMagnitude)
+            body.friction = newFriction
         }
         
         sphere.physicsBody = body
@@ -3255,14 +3282,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let newRestitution: CGFloat
         
         switch powerUp.level {
-        case 1:
-            newRestitution = 0.8
-        case 2:
-            newRestitution = 0.9
-        case 3:
-            newRestitution = 1.0
-        default:
-            newRestitution = 0.8
+        case 1: newRestitution = 0.7
+        case 2: newRestitution = 0.8
+        case 3: newRestitution = 0.9
+        default: newRestitution = 0.7
         }
         
         // Update walls
@@ -3295,6 +3318,44 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         #if DEBUG
         print("Resetting Rubber World effect")
+        #endif
+    }
+    
+    private func applyIceWorldEffect() {
+        guard let powerUp = getActiveEnvironmentalPowerUp(), powerUp.name == "Ice World" else { return }
+        
+        let newFriction = CGFloat(powerUp.currentStats.forceMagnitude)
+        
+        // Update walls
+        self.physicsBody?.friction = newFriction
+        
+        // Update existing spheres
+        enumerateChildNodes(withName: "sphere") { node, _ in
+            node.physicsBody?.friction = newFriction
+        }
+        
+        #if DEBUG
+        print("Applying Ice World effect: Level \(powerUp.level), Friction: \(newFriction)")
+        #endif
+    }
+    
+    private func resetIceWorldEffect() {
+        // Reset walls to default
+        self.physicsBody?.friction = 0.2
+        
+        // Reset existing spheres to their defaults
+        enumerateChildNodes(withName: "sphere") { node, _ in
+            if let sphereNode = node as? SKShapeNode,
+               let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
+               activePowerUps.contains("Super Massive Ball") {
+                node.physicsBody?.friction = 0.15 // Super Massive Ball friction
+            } else {
+                node.physicsBody?.friction = 0.4 // Default sphere friction
+            }
+        }
+        
+        #if DEBUG
+        print("Resetting Ice World effect")
         #endif
     }
 }
