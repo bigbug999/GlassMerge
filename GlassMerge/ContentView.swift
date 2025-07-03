@@ -839,26 +839,23 @@ class GameViewModel: ObservableObject {
         
         // Handle targeting power-ups differently
         if powerUp.type == .targeting {
-            // If already active, deactivate it
-            if powerUp.isActive {
-                powerUp.isActive = false
+            // If it's already primed, tapping it again de-primes it.
+            if powerUp.isPrimed {
                 powerUp.isPrimed = false
                 #if DEBUG
-                print("\(powerUp.name) deactivated!")
+                print("\(powerUp.name) de-primed.")
                 #endif
             }
-            // If primed, activate it (consume charge)
-            else if powerUp.isPrimed {
-                if powerUp.useCharge() {
-                    powerUp.isActive = true
-                    powerUp.isPrimed = false
-                    #if DEBUG
-                    print("\(powerUp.name) activated!")
-                    #endif
-                }
-            }
-            // If neither, prime it (priming doesn't consume a charge)
+            // If it's not primed, try to prime it.
             else {
+                // You can only prime a power-up if it has charges.
+                guard powerUp.canBeUsed else {
+                    #if DEBUG
+                    print("Cannot prime \(powerUp.name): no charges available.")
+                    #endif
+                    return
+                }
+
                 // Deprime any other targeting power-ups
                 for i in equippedPowerUps.indices {
                     if var otherPowerUp = equippedPowerUps[i],
@@ -1219,17 +1216,25 @@ class GameViewModel: ObservableObject {
         xp += points
         
         // Handle power-up recharging on merge
+        var handledPowerUpIDs = Set<UUID>()
         for i in equippedPowerUps.indices {
-            if var powerUp = equippedPowerUps[i] {
-                powerUp.handleMerge()
-                equippedPowerUps[i] = powerUp
-                
-                #if DEBUG
-                if powerUp.isRecharging {
-                    print("Power-up \(powerUp.name) recharging: \(powerUp.mergesUntilRecharge) merges remaining")
+            guard var powerUp = equippedPowerUps[i], !handledPowerUpIDs.contains(powerUp.id) else { continue }
+            
+            handledPowerUpIDs.insert(powerUp.id)
+            powerUp.handleMerge()
+
+            // Update all slots for this power up since it's a struct
+            for j in equippedPowerUps.indices {
+                if equippedPowerUps[j]?.id == powerUp.id {
+                    equippedPowerUps[j] = powerUp
                 }
-                #endif
             }
+
+            #if DEBUG
+            if powerUp.isRecharging {
+                print("Power-up \(powerUp.name) recharging: \(powerUp.mergesUntilRecharge) merges remaining")
+            }
+            #endif
         }
         
         #if DEBUG
@@ -3240,45 +3245,49 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     private func activateTargetingPowerUp(_ powerUp: PowerUp, on sphere: SKShapeNode) {
-        // Apply power-up effect
-        var activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
-        activePowerUps.append(powerUp.name)
-        sphere.userData?["activePowerUps"] = activePowerUps
+        // Find the power-up in the view model to ensure we're modifying the source of truth
+        guard var vmPowerUp = viewModel?.equippedPowerUps.first(where: { $0?.id == powerUp.id })?.flatMap({$0}) else { return }
         
-        // Apply visual effect
-        if let color = powerUpColors[powerUp.name] {
-            sphere.strokeColor = color
-            sphere.lineWidth = 3.0
-        }
+        // Use a charge, and if successful, apply the effect
+        guard vmPowerUp.useCharge() else { return }
         
-        // Clean up targeting state
-        targetingCircle?.removeFromParent()
-        targetingCircle = nil
-        selectedTarget = nil
-        targetingState = .none
-        
-        // Reset power-up state in view model
-        // First deactivate the current power-up
-        viewModel?.activatePowerUp(powerUp) // This will deactivate it since it's currently active
-        
-        // Then update all slots to ensure the power-up is fully reset
-        if let viewModel = viewModel {
-            for i in viewModel.equippedPowerUps.indices {
-                if var slotPowerUp = viewModel.equippedPowerUps[i],
-                   slotPowerUp.id == powerUp.id {
-                    slotPowerUp.isActive = false
-                    slotPowerUp.isPrimed = false
-                    viewModel.equippedPowerUps[i] = slotPowerUp
-                }
+        // Apply power-up effect based on its name
+        switch powerUp.name {
+        case "Selective Deletion":
+            sphere.removeFromParent()
+        default:
+            var activePowerUps = sphere.userData?["activePowerUps"] as? [String] ?? []
+            activePowerUps.append(powerUp.name)
+            sphere.userData?["activePowerUps"] = activePowerUps
+            
+            if let color = powerUpColors[powerUp.name] {
+                sphere.strokeColor = color
+                sphere.lineWidth = 3.0
             }
         }
         
+        // Clean up targeting state in the scene
+        exitTargetingMode()
+        
+        // Reset the power-up state to idle after use
+        vmPowerUp.isActive = false
+        vmPowerUp.isPrimed = false
+        
+        // Update all slots in the view model with the modified power-up
+        if let viewModel = viewModel {
+            for i in viewModel.equippedPowerUps.indices {
+                if viewModel.equippedPowerUps[i]?.id == vmPowerUp.id {
+                    viewModel.equippedPowerUps[i] = vmPowerUp
+                }
+            }
+        }
+
         #if os(iOS)
         HapticManager.shared.playMergeHaptic()
         #endif
         
         #if DEBUG
-        print("Activated targeting power-up: \(powerUp.name) on sphere and reset power-up state")
+        print("Activated targeting power-up: \(powerUp.name) on sphere, charge consumed.")
         #endif
     }
     
