@@ -2252,9 +2252,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         setupDangerZone()
         setupEnvironmentalBorder()
         
+        var restoredCurrentSphere = false
         // Restore spheres from saved state if available
         if let sphereStates = viewModel?.getSphereStates(), !sphereStates.isEmpty {
-            for state in sphereStates {
+            // Separate the current sphere from the rest
+            let currentSphereState = sphereStates.first(where: { $0.isCurrentSphere })
+            let otherSphereStates = sphereStates.filter { !$0.isCurrentSphere }
+
+            // Restore other spheres with physics
+            for state in otherSphereStates {
                 let position = CGPoint(x: state.positionX, y: state.positionY)
                 let activePowerUps = state.activePowerUps?.split(separator: ",").map(String.init) ?? []
                 if let sphere = createAndPlaceSphere(at: position, tier: Int(state.tier), activePowerUps: activePowerUps) {
@@ -2262,9 +2268,33 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     sphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
                 }
             }
+            
+            // Restore the current sphere without physics
+            if let state = currentSphereState {
+                let tier = Int(state.tier)
+                if let sphere = createSphereNode(tier: tier) {
+                    let position = CGPoint(x: state.positionX, y: state.positionY)
+                    sphere.position = position
+
+                    // Restore its power-up visual state
+                    let activePowerUps = state.activePowerUps?.split(separator: ",").map(String.init) ?? []
+                    sphere.userData?["activePowerUps"] = activePowerUps
+                    if let powerUpName = activePowerUps.first, let color = powerUpColors[powerUpName] {
+                        sphere.strokeColor = color
+                        sphere.lineWidth = 3
+                    }
+
+                    addChild(sphere)
+                    self.currentSphere = sphere
+                    restoredCurrentSphere = true
+                }
+            }
         }
         
-        spawnNewSphere(at: nil, animated: false)
+        // If no current sphere was restored (new game or old save file), spawn a new one.
+        if !restoredCurrentSphere {
+            spawnNewSphere(at: nil, animated: false)
+        }
     }
     
     private func setupGrid() {
@@ -2616,6 +2646,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             sphereEntity.tier = Int64(tier)
             sphereEntity.positionX = sphereNode.position.x
             sphereEntity.positionY = sphereNode.position.y
+            sphereEntity.isCurrentSphere = (sphereNode === currentSphere) // Tag the held sphere
             
             // Get active power-ups for this sphere
             let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String] ?? []
