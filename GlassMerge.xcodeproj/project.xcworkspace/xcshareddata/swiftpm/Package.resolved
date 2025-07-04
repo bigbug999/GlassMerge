@@ -1,5 +1,5 @@
 {
-  "originHash" : "854e288d98f610136659a608597076475e59cd144d7f2033a2f471ab5dad0950",
+  "originHash" : "4b11c899c31836893a2c709e78f06ca79035fc6e8f44a4f2bb9db5047f8f56c7",
   "pins" : [
     {
       "identity" : "inject",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "728c56639ecb3df441d51d5bc6747329afabcfc9",
         "version" : "1.5.2"
+      }
+    },
+    {
+      "identity" : "sticker",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/bpisano/sticker",
+      "state" : {
+        "revision" : "301b9e0fb802c01edb2ed25695b3ba62e9c61da3",
+        "version" : "1.4.0"
       }
     }
   ],

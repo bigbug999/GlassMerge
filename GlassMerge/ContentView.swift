@@ -11,6 +11,7 @@ import SpriteKit
 import CoreData
 #if os(iOS)
 import UIKit
+import CoreMotion
 import CoreHaptics
 #endif
 
@@ -103,6 +104,8 @@ struct PowerUpStats {
             return PowerUpStats(duration: 60, forceMagnitude: 1.5)
         case "Ice World":
             return PowerUpStats(duration: 60, forceMagnitude: 0.1)
+        case "Tilt World":
+            return PowerUpStats(duration: 45, forceMagnitude: 1.0)
             
         default:
             return PowerUpStats(duration: nil, forceMagnitude: 1.0)
@@ -315,6 +318,16 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 1000
         ),
+        PowerUp(
+            name: "Tilt World",
+            description: "Use your device's motion to control gravity's direction.",
+            category: .physics,
+            type: .environment,
+            icon: "move.3d",
+            isUnlocked: false,
+            level: 1,
+            cost: 1500
+        ),
         
         // TARGETING POWER-UPS (affect existing balls)
         PowerUp(
@@ -454,15 +467,21 @@ class GameViewModel: ObservableObject {
     @Published var powerUpChoices: [PowerUpChoice] = []
     @Published var hasReroll: Bool = true
     @Published var score: Int = 0
+    @Published var highScore: Int = 0
     @Published var xp: Int = 0
     @Published var level: Int = 1
     @Published var isGamePaused: Bool = false
     @Published var selectedFlaskSize: FlaskSize = .small
-    let xpNeededPerLevel: Int = 10  // Changed from 30 to 10 for testing
+    let xpNeededPerLevel: Int = 100  // Changed from 30 to 10 for testing
     let powerUpManager: PowerUpManager
     private var run: Run?
     var sphereStateProvider: (() -> [Sphere])?
     private var powerUpTimer: Timer?
+    
+    #if DEBUG
+    @Published var debug_spawnBallTier: Int? = nil
+    @Published var debug_spawnBallTierSelection: Int = 1
+    #endif
     
     // Define a type to represent either a new power-up or an upgrade
     enum PowerUpChoice: Identifiable {
@@ -494,6 +513,7 @@ class GameViewModel: ObservableObject {
     init(powerUpManager: PowerUpManager, gameData: GameData) {
         self.powerUpManager = powerUpManager
         self.run = gameData.currentRun
+        self.highScore = Int(gameData.highScore)
         
         if let run = self.run {
             self.applyRunState(run)
@@ -676,6 +696,7 @@ class GameViewModel: ObservableObject {
     }
     
     func presentLevelUpChoices() {
+        let excludedPowerUps: Set<String> = ["Magnetic Ball", "Repulsion Field", "Negative Ball"]
         let hasEmptySlot = equippedPowerUps.contains(where: { $0 == nil })
         
         #if DEBUG
@@ -693,7 +714,8 @@ class GameViewModel: ObservableObject {
         // Get ALL equipped power-ups that aren't max level and have enough slots for upgrade
         let upgradeablePowerUps = equippedPowerUps.compactMap { powerUp -> PowerUp? in
             guard let powerUp = powerUp,
-                  powerUp.level < PowerUp.maxLevel else { return nil }
+                  powerUp.level < PowerUp.maxLevel,
+                  !excludedPowerUps.contains(powerUp.name) else { return nil }
             
             let hasSlots = hasEnoughSlotsForUpgrade(powerUp)
             
@@ -725,7 +747,8 @@ class GameViewModel: ObservableObject {
             let availablePowerUps = powerUpManager.getAvailablePowerUps()
                 .filter { powerUp in
                     !seenPowerUpNames.contains(powerUp.name) &&
-                    !equippedPowerUps.contains(where: { $0?.name == powerUp.name })
+                    !equippedPowerUps.contains(where: { $0?.name == powerUp.name }) &&
+                    !excludedPowerUps.contains(powerUp.name)
                 }
             
             let newPowerUps = availablePowerUps.shuffled()
@@ -807,8 +830,6 @@ class GameViewModel: ObservableObject {
     }
     
     func rerollChoices() {
-        guard hasReroll else { return }
-        hasReroll = false
         presentLevelUpChoices()
     }
     
@@ -1166,6 +1187,14 @@ class GameViewModel: ObservableObject {
         run.xp = Int64(xp)
         run.selectedFlaskSize = selectedFlaskSize.rawValue
 
+        // Update high score in GameData
+        if let gameData = run.gameData {
+            if score > gameData.highScore {
+                gameData.highScore = Int64(score)
+                self.highScore = score
+            }
+        }
+
         // Update sphere states
         if let provider = sphereStateProvider {
             let currentSphereStates = provider()
@@ -1211,9 +1240,21 @@ class GameViewModel: ObservableObject {
         #endif
     }
     
+    func endRun() {
+        if let run = self.run {
+             CoreDataManager.shared.context.delete(run)
+             CoreDataManager.shared.saveContext()
+        }
+        self.run = nil
+    }
+    
     func earnScore(points: Int = 1) {
         score += points
         xp += points
+
+        if score > highScore {
+            highScore = score
+        }
         
         // Handle power-up recharging on merge
         var handledPowerUpIDs = Set<UUID>()
@@ -1286,6 +1327,16 @@ class GameViewModel: ObservableObject {
         selectedFlaskSize = .small
         powerUpManager.resetOfferedPowerUps() // Reset offered power-ups when starting new game
     }
+
+    #if DEBUG
+    func debug_triggerLevelUp() {
+        presentLevelUpChoices()
+    }
+
+    func debug_spawnBall() {
+        debug_spawnBallTier = debug_spawnBallTierSelection
+    }
+    #endif
 }
 
 struct ContentView: View {
@@ -1342,6 +1393,7 @@ struct ContentView: View {
 struct MainMenuView: View {
     @Binding var currentScreen: ContentView.GameScreen
     @State private var hasSave: Bool = CoreDataManager.shared.hasActiveRun()
+    @State private var highScore: Int = 0
     var onNewGame: (() -> Void)? = nil
     var onContinue: (() -> Void)? = nil
     
@@ -1350,6 +1402,12 @@ struct MainMenuView: View {
             Text("Glass Merge")
                 .font(.largeTitle)
                 .fontWeight(.bold)
+
+            if highScore > 0 {
+                Text("High Score: \(highScore)")
+                    .font(.title2)
+                    .foregroundColor(.gray)
+            }
             
             VStack(spacing: 15) {
                 Button("New Game") {
@@ -1384,6 +1442,7 @@ struct MainMenuView: View {
         }
         .onAppear {
             hasSave = CoreDataManager.shared.hasActiveRun()
+            highScore = Int(CoreDataManager.shared.getGameData().highScore)
         }
     }
 }
@@ -1558,9 +1617,14 @@ struct GameView: View {
                     .edgesIgnoringSafeArea(.all)
                     .transition(.opacity)
                 
-                PauseMenuView(isPaused: $isPaused, currentScreen: $currentScreen, onMainMenu: {
-                    viewModel.saveGameState()
-                })
+                PauseMenuView(
+                    viewModel: viewModel,
+                    isPaused: $isPaused,
+                    currentScreen: $currentScreen,
+                    onMainMenu: {
+                        viewModel.saveGameState()
+                    }
+                )
             }
             
             if isGameOver {
@@ -1570,7 +1634,9 @@ struct GameView: View {
                 
                 GameOverView(
                     score: viewModel.score,
+                    highScore: viewModel.highScore,
                     onMainMenu: {
+                        viewModel.endRun()
                         currentScreen = .mainMenu
                     }
                 )
@@ -1581,6 +1647,11 @@ struct GameView: View {
         }
         .onChange(of: isPaused) { _, newValue in
             viewModel.isGamePaused = newValue
+            if newValue {
+                viewModel.saveGameState()
+            }
+        }
+        .onChange(of: isGameOver) { _, newValue in
             if newValue {
                 viewModel.saveGameState()
             }
@@ -1782,6 +1853,7 @@ struct PowerUpSlot: View {
 }
 
 struct PauseMenuView: View {
+    @ObservedObject var viewModel: GameViewModel
     @Binding var isPaused: Bool
     @Binding var currentScreen: ContentView.GameScreen
     var onMainMenu: (() -> Void)? = nil
@@ -1816,6 +1888,44 @@ struct PauseMenuView: View {
                 .frame(width: 200)
             }
             .buttonStyle(.bordered)
+            
+            #if DEBUG
+            VStack(spacing: 10) {
+                Text("Debug Tools")
+                    .font(.headline)
+                    .padding(.top)
+
+                Button("Trigger Level Up") {
+                    viewModel.debug_triggerLevelUp()
+                    isPaused = false
+                }
+                .buttonStyle(.bordered)
+                .frame(width: 200)
+                
+                VStack {
+                    HStack {
+                        Text("Spawn Tier:")
+                            .foregroundColor(.white)
+                        Spacer()
+                        Text("\(viewModel.debug_spawnBallTierSelection)")
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                        Stepper("", value: $viewModel.debug_spawnBallTierSelection, in: 1...(GameScene.tierData.count))
+                            .labelsHidden()
+                    }
+                    Button("Spawn") {
+                        viewModel.debug_spawnBall()
+                        isPaused = false
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                }
+                .frame(width: 200)
+            }
+            .padding()
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(10)
+            #endif
         }
         .padding(40)
         .background(
@@ -2030,6 +2140,7 @@ struct PowerUpChoiceCard: View {
 
 struct GameOverView: View {
     let score: Int
+    let highScore: Int
     let onMainMenu: () -> Void
     
     var body: some View {
@@ -2042,6 +2153,10 @@ struct GameOverView: View {
             Text("Score: \(score)")
                 .font(.title2)
                 .foregroundColor(.white)
+
+            Text("High Score: \(highScore)")
+                .font(.headline)
+                .foregroundColor(.gray)
                 .padding(.bottom, 20)
             
             Button(action: onMainMenu) {
@@ -2133,6 +2248,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var gridNode: SKNode?
     private var environmentalBorder: SKShapeNode?
     private var previouslyActiveEnvironmentalPowerUpName: String?
+    private let motionManager = CMMotionManager()
     
     // MARK: - Targeting System
     enum TargetingState {
@@ -2159,6 +2275,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         "Low Gravity": SKColor(Color.blue),
         "Rubber World": SKColor(Color.green),
         "Ice World": SKColor(Color.cyan),
+        "Tilt World": SKColor(Color.yellow),
         
         // Targeting power-ups
         "Selective Deletion": SKColor(Color.red.opacity(0.7)),
@@ -2207,6 +2324,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
                 resetRubberWorldEffect()
                 applyIceWorldEffect()
+            case "Tilt World":
+                resetRubberWorldEffect()
+                resetIceWorldEffect()
+                applyTiltWorldEffect()
             default:
                 // Reset all environmental effects if an unknown one is active
                 physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
@@ -2303,11 +2424,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         physicsWorld.gravity = CGVector(dx: 0, dy: -9.8)
         physicsWorld.contactDelegate = self
         
-        // Setup boundary physics body
-        let frame = SKPhysicsBody(edgeLoopFrom: self.frame)
-        frame.friction = 0.2
-        frame.restitution = 0.2
-        self.physicsBody = frame
+        // Setup boundary physics body that extends above the visible area, with a ceiling.
+        let extendedHeight = self.frame.height * 2
+        let physicsRect = CGRect(x: self.frame.minX, y: self.frame.minY, width: self.frame.width, height: extendedHeight)
+        let frameBody = SKPhysicsBody(edgeLoopFrom: physicsRect)
+        frameBody.friction = 0.2
+        frameBody.restitution = 0.2
+        self.physicsBody = frameBody
         self.physicsBody?.categoryBitMask = PhysicsCategory.wall
         
         backgroundColor = .black
@@ -2334,6 +2457,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         setupGrid()
         setupDangerZone()
         setupEnvironmentalBorder()
+        
+        startAccelerometer()
         
         var restoredCurrentSphere = false
         // Restore spheres from saved state if available
@@ -2378,6 +2503,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if !restoredCurrentSphere {
             spawnNewSphere(at: nil, animated: false)
         }
+    }
+    
+    override func willMove(from view: SKView) {
+        super.willMove(from: view)
+        stopAccelerometer()
     }
     
     private func setupGrid() {
@@ -2763,6 +2893,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     override func update(_ currentTime: TimeInterval) {
+        #if DEBUG
+        if let viewModel = viewModel, let tier = viewModel.debug_spawnBallTier {
+            let centerPosition = CGPoint(x: frame.midX, y: frame.midY)
+            if let sphere = createAndPlaceSphere(at: centerPosition, tier: tier) {
+                 sphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
+            }
+            viewModel.debug_spawnBallTier = nil // Reset after spawning
+        }
+        #endif
         // Update environmental border state
         updateEnvironmentalBorder()
         
@@ -3453,6 +3592,33 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 }
             }
         }
+    }
+    
+    private func applyTiltWorldEffect() {
+        guard let powerUp = getActiveEnvironmentalPowerUp(), powerUp.name == "Tilt World", let data = motionManager.accelerometerData else { return }
+
+        let sensitivity = powerUp.currentStats.forceMagnitude
+        let gravityStrength = 9.8 * sensitivity
+
+        let dx = data.acceleration.x * gravityStrength
+        let dy = data.acceleration.y * gravityStrength
+
+        physicsWorld.gravity = CGVector(dx: dx, dy: dy)
+    }
+    
+    func startAccelerometer() {
+        guard motionManager.isAccelerometerAvailable else {
+            #if DEBUG
+            print("Accelerometer is not available on this device.")
+            #endif
+            return
+        }
+        motionManager.accelerometerUpdateInterval = 0.1
+        motionManager.startAccelerometerUpdates()
+    }
+
+    func stopAccelerometer() {
+        motionManager.stopAccelerometerUpdates()
     }
 }
 

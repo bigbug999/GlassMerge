@@ -203,6 +203,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				2E124F112DF7CEF200DFA819 /* XCRemoteSwiftPackageReference "Inject" */,
+				2EAC547B2E1861D900CE496E /* XCRemoteSwiftPackageReference "sticker" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2EC24AB22DF76A5D00175406 /* Products */;
@@ -611,6 +612,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 1.5.2;
+			};
+		};
+		2EAC547B2E1861D900CE496E /* XCRemoteSwiftPackageReference "sticker" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/bpisano/sticker";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.4.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

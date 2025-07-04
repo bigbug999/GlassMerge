@@ -53,6 +53,7 @@ final class CoreDataManager {
         // If no GameData exists, create a new one
         let newGameData = GameData(context: context)
         newGameData.currency = 0
+        newGameData.highScore = 0
         newGameData.firstLaunchDate = Date()
         newGameData.totalPlayTime = 0
         newGameData.unlockedFlaskSizes = FlaskSize.small.rawValue
