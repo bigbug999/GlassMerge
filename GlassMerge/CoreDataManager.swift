@@ -62,7 +62,8 @@ final class CoreDataManager {
         let initialProgressions = PowerUpManager().powerUps.map { powerUp -> PowerUpProgression in
             let progression = PowerUpProgression(context: context)
             progression.id = powerUp.name
-            progression.isUnlocked = false
+            // Unlock "Super Massive Ball", "Selective Deletion", and "Low Gravity" by default
+            progression.isUnlocked = (powerUp.name == "Super Massive Ball" || powerUp.name == "Selective Deletion" || powerUp.name == "Low Gravity")
             progression.level = 1
             return progression
         }
@@ -95,6 +96,20 @@ final class CoreDataManager {
     func hasActiveRun() -> Bool {
         return getGameData().currentRun != nil
     }
+    
+    #if DEBUG
+    func resetGameData() {
+        let request: NSFetchRequest<GameData> = GameData.fetchRequest()
+        do {
+            if let gameData = try context.fetch(request).first {
+                context.delete(gameData)
+                saveContext()
+            }
+        } catch {
+            print("Failed to reset GameData: \(error)")
+        }
+    }
+    #endif
 }
 
 // MARK: - JSON to Core Data Migration

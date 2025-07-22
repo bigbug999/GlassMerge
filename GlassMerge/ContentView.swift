@@ -41,8 +41,8 @@ enum FlaskSize: String, Codable, CaseIterable {
     var cost: Int {
         switch self {
         case .small: return 0
-        case .medium: return 1000
-        case .large: return 10000
+        case .medium: return 250
+        case .large: return 500
         }
     }
     
@@ -212,7 +212,11 @@ struct PowerUp: Identifiable {
     
     // Upgrade costs
     var upgradeCost: Int {
-        return cost * level
+        switch level {
+        case 1: return 50 // Cost to upgrade to level 2
+        case 2: return 100 // Cost to upgrade to level 3
+        default: return Int.max // No upgrade available
+        }
     }
     
     static let maxLevel = 3
@@ -264,7 +268,7 @@ class PowerUpManager: ObservableObject {
             icon: "circle.circle.fill",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         PowerUp(
             name: "Magnetic Ball",
@@ -274,7 +278,7 @@ class PowerUpManager: ObservableObject {
             icon: "bolt.circle.fill",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         PowerUp(
             name: "Negative Ball",
@@ -284,7 +288,7 @@ class PowerUpManager: ObservableObject {
             icon: "xmark.circle.fill",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         
         // ENVIRONMENTAL POWER-UPS (affect entire play area)
@@ -296,7 +300,7 @@ class PowerUpManager: ObservableObject {
             icon: "arrow.down.circle",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         PowerUp(
             name: "Rubber World",
@@ -306,7 +310,7 @@ class PowerUpManager: ObservableObject {
             icon: "arrow.up.and.down.circle",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         PowerUp(
             name: "Ice World",
@@ -316,7 +320,7 @@ class PowerUpManager: ObservableObject {
             icon: "snowflake",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         PowerUp(
             name: "Tilt World",
@@ -326,7 +330,7 @@ class PowerUpManager: ObservableObject {
             icon: "move.3d",
             isUnlocked: false,
             level: 1,
-            cost: 1500
+            cost: 25
         ),
         
         // TARGETING POWER-UPS (affect existing balls)
@@ -338,7 +342,7 @@ class PowerUpManager: ObservableObject {
             icon: "trash.circle.fill",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         ),
         PowerUp(
             name: "Repulsion Field",
@@ -348,7 +352,7 @@ class PowerUpManager: ObservableObject {
             icon: "rays",
             isUnlocked: false,
             level: 1,
-            cost: 1000
+            cost: 25
         )
     ]
     
@@ -364,7 +368,8 @@ class PowerUpManager: ObservableObject {
         self.loadProgression()
     }
 
-    private func loadProgression() {
+    func loadProgression() {
+        self.gameData = CoreDataManager.shared.getGameData() // Ensure gameData is fresh
         guard let gameData = self.gameData else { return }
         
         self.currency = Int(gameData.currency)
@@ -472,7 +477,9 @@ class GameViewModel: ObservableObject {
     @Published var level: Int = 1
     @Published var isGamePaused: Bool = false
     @Published var selectedFlaskSize: FlaskSize = .small
-    let xpNeededPerLevel: Int = 100  // Changed from 30 to 10 for testing
+    var xpNeededForNextLevel: Int {
+        return level * 25
+    }
     let powerUpManager: PowerUpManager
     private var run: Run?
     var sphereStateProvider: (() -> [Sphere])?
@@ -1241,10 +1248,19 @@ class GameViewModel: ObservableObject {
     }
     
     func endRun() {
+        // Calculate and award currency before deleting the run
+        let coinsEarned = Int(ceil(Double(score) / 10.0))
+        powerUpManager.currency += coinsEarned
+        
+        if let gameData = self.run?.gameData {
+            gameData.currency = Int64(powerUpManager.currency)
+        }
+        
         if let run = self.run {
              CoreDataManager.shared.context.delete(run)
-             CoreDataManager.shared.saveContext()
         }
+        
+        CoreDataManager.shared.saveContext()
         self.run = nil
     }
     
@@ -1279,10 +1295,10 @@ class GameViewModel: ObservableObject {
         }
         
         #if DEBUG
-        print("EarnScore: score=\(score) xp=\(xp)/\(xpNeededPerLevel) level=\(level)")
+        print("EarnScore: score=\(score) xp=\(xp)/\(xpNeededForNextLevel) level=\(level)")
         #endif
-        if xp >= xpNeededPerLevel {
-            xp -= xpNeededPerLevel
+        if xp >= xpNeededForNextLevel {
+            xp -= xpNeededForNextLevel
             level += 1
             #if DEBUG
             print("LEVEL UP! new level=\(level) xp reset to \(xp)")
@@ -1394,6 +1410,7 @@ struct MainMenuView: View {
     @Binding var currentScreen: ContentView.GameScreen
     @State private var hasSave: Bool = CoreDataManager.shared.hasActiveRun()
     @State private var highScore: Int = 0
+    @StateObject private var powerUpManager = PowerUpManager()
     var onNewGame: (() -> Void)? = nil
     var onContinue: (() -> Void)? = nil
     
@@ -1408,6 +1425,10 @@ struct MainMenuView: View {
                     .font(.title2)
                     .foregroundColor(.gray)
             }
+            
+            Text("Coins: \(powerUpManager.currency)")
+                .font(.title2)
+                .foregroundColor(.yellow)
             
             VStack(spacing: 15) {
                 Button("New Game") {
@@ -1439,10 +1460,40 @@ struct MainMenuView: View {
                 .buttonStyle(.bordered)
             }
             .padding()
+
+            #if DEBUG
+            VStack {
+                Text("Debug Tools")
+                    .font(.headline)
+                    .padding(.top)
+
+                Button("Reset Progress") {
+                    CoreDataManager.shared.resetGameData()
+                    // Reload data to reflect changes
+                    powerUpManager.loadProgression()
+                    highScore = 0
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                
+                Button("Add 1000 Coins") {
+                    powerUpManager.currency += 1000
+                    let gameData = CoreDataManager.shared.getGameData()
+                    gameData.currency = Int64(powerUpManager.currency)
+                    CoreDataManager.shared.saveContext()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(10)
+            #endif
         }
         .onAppear {
             hasSave = CoreDataManager.shared.hasActiveRun()
             highScore = Int(CoreDataManager.shared.getGameData().highScore)
+            // The powerUpManager now loads its own data, so we just need to trigger a view update.
+            // By being a @StateObject, it will reload when the view appears.
         }
     }
 }
@@ -1573,7 +1624,7 @@ struct GameView: View {
                     Text("Score: \(viewModel.score)")
                         .font(.headline)
                     Spacer()
-                    ProgressView(value: Double(viewModel.xp), total: Double(viewModel.xpNeededPerLevel))
+                    ProgressView(value: Double(viewModel.xp), total: Double(viewModel.xpNeededForNextLevel))
                         .progressViewStyle(.linear)
                         .frame(width: 150)
                     Spacer()
@@ -1942,6 +1993,22 @@ struct UpgradeShopView: View {
     @StateObject private var powerUpManager = PowerUpManager()
     let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
     
+    private var sortedPowerUps: [PowerUp] {
+        let originalIndices = Dictionary(uniqueKeysWithValues: powerUpManager.powerUps.enumerated().map { ($0.element.id, $0.offset) })
+        
+        return powerUpManager.powerUps.sorted { p1, p2 in
+            if p1.isUnlocked != p2.isUnlocked {
+                return p1.isUnlocked // Unlocked power-ups come first
+            }
+            
+            // Otherwise, maintain the original order
+            guard let index1 = originalIndices[p1.id], let index2 = originalIndices[p2.id] else {
+                return false
+            }
+            return index1 < index2
+        }
+    }
+    
     var body: some View {
         VStack {
             HStack {
@@ -1959,22 +2026,136 @@ struct UpgradeShopView: View {
                 .font(.title)
                 .padding(.bottom)
             
+            Text("Coins: \(powerUpManager.currency)")
+                .font(.title2)
+                .foregroundColor(.yellow)
+                .padding(.bottom)
+            
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(powerUpManager.powerUps) { powerUp in
-                        VStack {
-                            PowerUpSlot(powerUp: powerUp)
-                            Text(powerUp.name)
-                                .font(.caption)
-                                .multilineTextAlignment(.center)
-                            Text("\(powerUp.cost) coins")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
+                // Flasks Section
+                VStack(alignment: .leading) {
+                    Text("Flasks")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    
+                    ForEach(FlaskSize.allCases.filter { $0 != .small }, id: \.self) { size in
+                        let isUnlocked = powerUpManager.getUnlockedFlaskSizes().contains(size)
+                        Button(action: {
+                            if !isUnlocked {
+                                _ = powerUpManager.unlockFlaskSize(size)
+                            }
+                        }) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(size.displayName)
+                                        .font(.headline)
+                                    Text(size.description)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                Spacer()
+                                if isUnlocked {
+                                    Text("Unlocked")
+                                        .foregroundColor(.green)
+                                } else {
+                                    HStack {
+                                        Image(systemName: "lock.fill")
+                                        Text("\(size.cost) Coins")
+                                    }
+                                    .foregroundColor(powerUpManager.currency >= size.cost ? .yellow : .gray)
+                                }
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color(white: 0.15))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isUnlocked || powerUpManager.currency < size.cost)
+                    }
+                }
+                .padding()
+                
+                // Power-ups Section
+                VStack(alignment: .leading) {
+                    Text("Power-ups")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(sortedPowerUps) { powerUp in
+                            if powerUp.isUnlocked {
+                                VStack(spacing: 4) {
+                                    PowerUpSlot(powerUp: powerUp)
+                                    Text(powerUp.name)
+                                        .font(.caption)
+                                        .multilineTextAlignment(.center)
+                                        .lineLimit(2)
+                                    
+                                    Spacer(minLength: 0)
+
+                                    if powerUp.level < PowerUp.maxLevel {
+                                        Button("Upgrade (\(powerUp.upgradeCost) C)") {
+                                            if powerUpManager.upgrade(powerUp) {
+                                                // The @Published property will update the view
+                                            }
+                                        }
+                                        .font(.caption2)
+                                        .buttonStyle(.bordered)
+                                        .disabled(powerUpManager.currency < powerUp.upgradeCost)
+                                    } else {
+                                        Text("Max Level")
+                                            .font(.caption)
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                                .padding(6)
+                                .frame(width: 100, height: 120)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color(white: 0.15))
+                                )
+                            } else {
+                                Button(action: {
+                                    _ = powerUpManager.unlock(powerUp)
+                                }) {
+                                    VStack(spacing: 4) {
+                                        PowerUpSlot(powerUp: powerUp)
+                                        Text(powerUp.name)
+                                            .font(.caption)
+                                            .multilineTextAlignment(.center)
+                                            .lineLimit(2)
+
+                                        Spacer(minLength: 0)
+                                        
+                                        HStack {
+                                            Image(systemName: "lock.fill")
+                                            Text("\(powerUp.cost) Coins")
+                                        }
+                                        .font(.caption)
+                                        .foregroundColor(powerUpManager.currency >= powerUp.cost ? .yellow : .gray)
+                                    }
+                                    .padding(6)
+                                    .frame(width: 100, height: 120)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .fill(Color(white: 0.15))
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(powerUpManager.currency < powerUp.cost)
+                                .opacity(powerUpManager.currency >= powerUp.cost ? 1.0 : 0.6)
+                            }
                         }
                     }
                 }
                 .padding()
             }
+        }
+        .onAppear {
+            // Reload data when the view appears to get the latest currency and unlocks
+            powerUpManager.loadProgression()
         }
     }
 }
