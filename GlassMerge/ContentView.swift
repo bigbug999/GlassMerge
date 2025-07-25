@@ -753,6 +753,7 @@ class GameViewModel: ObservableObject {
         if hasEmptySlot {
             let availablePowerUps = powerUpManager.getAvailablePowerUps()
                 .filter { powerUp in
+                    powerUp.isUnlocked &&
                     !seenPowerUpNames.contains(powerUp.name) &&
                     !equippedPowerUps.contains(where: { $0?.name == powerUp.name }) &&
                     !excludedPowerUps.contains(powerUp.name)
@@ -1683,9 +1684,11 @@ struct GameView: View {
                     .edgesIgnoringSafeArea(.all)
                     .transition(.opacity)
                 
+                let coinsEarned = Int(ceil(Double(viewModel.score) / 10.0))
                 GameOverView(
                     score: viewModel.score,
                     highScore: viewModel.highScore,
+                    coinsEarned: coinsEarned,
                     onMainMenu: {
                         viewModel.endRun()
                         currentScreen = .mainMenu
@@ -2322,6 +2325,7 @@ struct PowerUpChoiceCard: View {
 struct GameOverView: View {
     let score: Int
     let highScore: Int
+    let coinsEarned: Int
     let onMainMenu: () -> Void
     
     var body: some View {
@@ -2338,6 +2342,11 @@ struct GameOverView: View {
             Text("High Score: \(highScore)")
                 .font(.headline)
                 .foregroundColor(.gray)
+                .padding(.bottom, 10)
+            
+            Text("Coins Earned: \(coinsEarned)")
+                .font(.headline)
+                .foregroundColor(.yellow)
                 .padding(.bottom, 20)
             
             Button(action: onMainMenu) {
@@ -2418,7 +2427,7 @@ struct SpriteKitContainer: UIViewRepresentable {
 class GameScene: SKScene, SKPhysicsContactDelegate {
     weak var viewModel: GameViewModel?
     
-    private var currentSphere: SKShapeNode?
+    private var currentSphere: SKSpriteNode?
     private var isTransitioning = false
     private var dangerZone: SKShapeNode?
     private var spheresInDangerZone = Set<SKPhysicsBody>()
@@ -2442,7 +2451,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private var targetingState: TargetingState = .none
     private var targetingPowerUp: PowerUp?
-    private var selectedTarget: SKShapeNode?
+    private var selectedTarget: SKSpriteNode?
     private var targetingCircle: SKShapeNode?
     
     // Define power-up colors
@@ -2563,11 +2572,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         static let dangerZone: UInt32 = 0x1 << 2
     }
     
-    private var scheduledForMerge = Set<SKShapeNode>()
+    private var scheduledForMerge = Set<SKSpriteNode>()
     
     struct TierInfo {
         let radius: CGFloat
-        let color: SKColor
+        let spriteName: String
     }
     
     static func calculateRadius(forTier tier: Int) -> CGFloat {
@@ -2577,15 +2586,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // From cyan to a dark gray/black
     static let tierData: [TierInfo] = (1...12).map { tier in
-        let colors: [SKColor] = [
-            SKColor(white: 0.60, alpha: 1.0), SKColor(white: 0.20, alpha: 1.0),
-            SKColor(white: 0.66, alpha: 1.0), SKColor(white: 0.26, alpha: 1.0),
-            SKColor(white: 0.72, alpha: 1.0), SKColor(white: 0.32, alpha: 1.0),
-            SKColor(white: 0.78, alpha: 1.0), SKColor(white: 0.38, alpha: 1.0),
-            SKColor(white: 0.84, alpha: 1.0), SKColor(white: 0.44, alpha: 1.0),
-            SKColor(white: 0.90, alpha: 1.0), SKColor(white: 0.50, alpha: 1.0)
-        ]
-        return TierInfo(radius: calculateRadius(forTier: tier), color: colors[tier - 1])
+        return TierInfo(radius: calculateRadius(forTier: tier), spriteName: "ball_\(tier)")
     }
     let maxTier = tierData.count
     
@@ -2669,8 +2670,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     let activePowerUps = state.activePowerUps?.split(separator: ",").map(String.init) ?? []
                     sphere.userData?["activePowerUps"] = activePowerUps
                     if let powerUpName = activePowerUps.first, let color = powerUpColors[powerUpName] {
-                        sphere.strokeColor = color
-                        sphere.lineWidth = 3
+                        sphere.color = color
+                        sphere.colorBlendFactor = 0.7
                     }
 
                     addChild(sphere)
@@ -2758,7 +2759,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         updateGrid()
         // Rescale existing spheres
         enumerateChildNodes(withName: "sphere") { node, _ in
-            guard let sphere = node as? SKShapeNode,
+            guard let sphere = node as? SKSpriteNode,
                   let tier = sphere.userData?["tier"] as? Int else { return }
             
             let tierIndex = tier - 1
@@ -2766,9 +2767,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let scaledRadius = tierInfo.radius * self.ballScale
             
             // Create new path with scaled radius
-            sphere.path = CGPath(ellipseIn: CGRect(x: -scaledRadius, y: -scaledRadius,
-                                                  width: scaledRadius * 2, height: scaledRadius * 2),
-                               transform: nil)
+            sphere.size = CGSize(width: scaledRadius * 2, height: scaledRadius * 2)
             
             // Update physics body
             if let body = sphere.physicsBody {
@@ -2855,10 +2854,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 self?.currentSphere = sphere
                 
                 // After scaling, check if we need to adjust position
-                if let radius = sphere.path?.boundingBox.width.half,
-                   let frameWidth = self?.frame.width {
+                if let strongSelf = self, let currentSphere = strongSelf.currentSphere {
+                    let radius = currentSphere.size.width.half
                     let currentX = sphere.position.x
-                    let constrainedX = min(max(radius, currentX), frameWidth - radius)
+                    let constrainedX = min(max(radius, currentX), strongSelf.frame.width - radius)
                     
                     if currentX != constrainedX {
                         let moveAction = SKAction.moveTo(x: constrainedX, duration: 0.2)
@@ -2873,25 +2872,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             self.currentSphere = sphere
             
             // Immediately adjust position if needed
-            if let radius = sphere.path?.boundingBox.width.half {
-                let currentX = sphere.position.x
-                let constrainedX = min(max(radius, currentX), frame.width - radius)
-                sphere.position = CGPoint(x: constrainedX, y: spawnY)
-            }
+            let radius = sphere.size.width.half
+            let currentX = sphere.position.x
+            let constrainedX = min(max(radius, currentX), frame.width - radius)
+            sphere.position = CGPoint(x: constrainedX, y: spawnY)
         }
     }
     
-    func createSphereNode(tier: Int) -> SKShapeNode? {
+    func createSphereNode(tier: Int) -> SKSpriteNode? {
         guard tier >= 1 && tier <= GameScene.tierData.count else { return nil }
         
         let tierIndex = tier - 1
         let tierInfo = GameScene.tierData[tierIndex]
         let scaledRadius = tierInfo.radius * ballScale
         
-        let sphere = SKShapeNode(circleOfRadius: scaledRadius)
-        sphere.fillColor = tierInfo.color
-        sphere.strokeColor = .white
-        sphere.lineWidth = 1
+        let sphere = SKSpriteNode(imageNamed: tierInfo.spriteName)
+        sphere.size = CGSize(width: scaledRadius * 2, height: scaledRadius * 2)
         sphere.name = "sphere"
         sphere.userData = [
             "tier": tier,
@@ -2901,7 +2897,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return sphere
     }
     
-    func createAndPlaceSphere(at position: CGPoint, tier: Int, activePowerUps: [String] = []) -> SKShapeNode? {
+    func createAndPlaceSphere(at position: CGPoint, tier: Int, activePowerUps: [String] = []) -> SKSpriteNode? {
         guard let sphere = createSphereNode(tier: tier) else { return nil }
         sphere.position = position
         
@@ -2911,8 +2907,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Apply visual effects based on active power-ups
         if let powerUpName = activePowerUps.first, // For now, we'll only show one power-up effect
            let color = powerUpColors[powerUpName] {
-            sphere.strokeColor = color
-            sphere.lineWidth = 3
+            sphere.color = color
+            sphere.colorBlendFactor = 0.7
         }
         
         addPhysics(to: sphere)
@@ -2920,8 +2916,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return sphere
     }
 
-    private func constrainPosition(_ position: CGPoint, forSphere sphere: SKShapeNode) -> CGPoint {
-        guard let radius = sphere.path?.boundingBox.width.half else { return position }
+    private func constrainPosition(_ position: CGPoint, forSphere sphere: SKSpriteNode) -> CGPoint {
+        let radius = sphere.size.width.half
         
         // Ensure the ball stays within bounds horizontally
         let constrainedX = min(max(radius, position.x), frame.width - radius)
@@ -3019,7 +3015,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func getCurrentSphereStates() -> [Sphere] {
         let context = CoreDataManager.shared.context
         let states = children.compactMap { node -> Sphere? in
-            guard let sphereNode = node as? SKShapeNode,
+            guard let sphereNode = node as? SKSpriteNode,
                   sphereNode.name == "sphere",
                   let tier = sphereNode.userData?["tier"] as? Int else { return nil }
             
@@ -3044,7 +3040,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Sphere-DangerZone contact
         if contactMask == (PhysicsCategory.sphere | PhysicsCategory.dangerZone) {
             let sphereBody = contact.bodyA.categoryBitMask == PhysicsCategory.sphere ? contact.bodyA : contact.bodyB
-            guard let sphereNode = sphereBody.node as? SKShapeNode,
+            guard let sphereNode = sphereBody.node as? SKSpriteNode,
                   let creationTime = sphereNode.userData?["creationTime"] as? TimeInterval else { return }
             
             let currentTime = Date().timeIntervalSinceReferenceDate
@@ -3058,8 +3054,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         // Sphere-Sphere contact for merging
         if contactMask == (PhysicsCategory.sphere | PhysicsCategory.sphere) {
-            guard let nodeA = contact.bodyA.node as? SKShapeNode,
-                  let nodeB = contact.bodyB.node as? SKShapeNode else { return }
+            guard let nodeA = contact.bodyA.node as? SKSpriteNode,
+                  let nodeB = contact.bodyB.node as? SKSpriteNode else { return }
 
             guard !scheduledForMerge.contains(nodeA) && !scheduledForMerge.contains(nodeB) else { return }
 
@@ -3148,11 +3144,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Update current sphere appearance if power-up state changes
         if let currentSphere = currentSphere {
             if let activePowerUp = currentActivePowerUp {
-                currentSphere.strokeColor = activePowerUp.color
-                currentSphere.lineWidth = 3
+                currentSphere.color = activePowerUp.color
+                currentSphere.colorBlendFactor = 0.7
             } else {
-                currentSphere.strokeColor = .white
-                currentSphere.lineWidth = 1
+                currentSphere.colorBlendFactor = 0.0
             }
         }
         
@@ -3217,14 +3212,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
     
-    func addPhysics(to sphere: SKShapeNode) {
+    func addPhysics(to sphere: SKSpriteNode) {
         guard sphere.physicsBody == nil,
               let tier = sphere.userData?["tier"] as? Int,
-              let pathWidth = sphere.path?.boundingBox.width,
-              pathWidth > 0
+              sphere.size.width > 0
         else { return }
         
-        let radius = pathWidth / 2
+        let radius = sphere.size.width / 2
         
         let body = SKPhysicsBody(circleOfRadius: radius)
         body.categoryBitMask = PhysicsCategory.sphere
@@ -3307,6 +3301,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         sphere.physicsBody = body
+        
+        // Add constraint to prevent visual rotation
+        let noRotationConstraint = SKConstraint.zRotation(SKRange(constantValue: 0.0))
+        sphere.constraints = [noRotationConstraint]
+        
         sphere.userData?["creationTime"] = Date().timeIntervalSinceReferenceDate
     }
     
@@ -3464,36 +3463,35 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     // MARK: - Sphere Selection
-    private func findSelectableSphere(at position: CGPoint) -> SKShapeNode? {
+    private func findSelectableSphere(at position: CGPoint) -> SKSpriteNode? {
         let touchedNodes = nodes(at: position)
         return touchedNodes.first { node in
-            guard let sphere = node as? SKShapeNode,
+            guard let sphere = node as? SKSpriteNode,
                   sphere.name == "sphere",
                   sphere !== currentSphere else { return false }
             return true
-        } as? SKShapeNode
+        } as? SKSpriteNode
     }
     
-    private func highlightSphere(_ sphere: SKShapeNode) {
-        // Store original stroke color if not already stored
-        if sphere.userData?["originalStrokeColor"] == nil {
-            sphere.userData?["originalStrokeColor"] = sphere.strokeColor
-        }
-        
+    private func highlightSphere(_ sphere: SKSpriteNode) {
         // Highlight effect
-        sphere.strokeColor = .yellow
-        sphere.lineWidth = 4.0
+        sphere.color = .yellow
+        sphere.colorBlendFactor = 0.7
         
         // Add subtle scale animation
         let scaleUp = SKAction.scale(to: 1.1, duration: 0.1)
         sphere.run(scaleUp)
     }
     
-    private func unhighlightSphere(_ sphere: SKShapeNode) {
+    private func unhighlightSphere(_ sphere: SKSpriteNode) {
         // Restore original stroke color
-        if let originalColor = sphere.userData?["originalStrokeColor"] as? SKColor {
-            sphere.strokeColor = originalColor
-            sphere.lineWidth = 1.0
+        if let activePowerUps = sphere.userData?["activePowerUps"] as? [String],
+           let powerUpName = activePowerUps.first,
+           let color = powerUpColors[powerUpName] {
+            sphere.color = color
+            sphere.colorBlendFactor = 0.7
+        } else {
+            sphere.colorBlendFactor = 0.0
         }
         
         // Remove scale
@@ -3501,7 +3499,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         sphere.run(scaleDown)
     }
     
-    private func selectSphere(_ sphere: SKShapeNode) {
+    private func selectSphere(_ sphere: SKSpriteNode) {
         // If we already have a selected target, unhighlight it
         if let currentTarget = selectedTarget {
             unhighlightSphere(currentTarget)
@@ -3564,7 +3562,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         targetingCircle.setScale(1.0)
     }
     
-    private func activateTargetingPowerUp(_ powerUp: PowerUp, on sphere: SKShapeNode) {
+    private func activateTargetingPowerUp(_ powerUp: PowerUp, on sphere: SKSpriteNode) {
         // Find the power-up in the view model to ensure we're modifying the source of truth
         guard var vmPowerUp = viewModel?.equippedPowerUps.first(where: { $0?.id == powerUp.id })?.flatMap({$0}) else { return }
         
@@ -3581,8 +3579,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             sphere.userData?["activePowerUps"] = activePowerUps
             
             if let color = powerUpColors[powerUp.name] {
-                sphere.strokeColor = color
-                sphere.lineWidth = 3.0
+                sphere.color = color
+                sphere.colorBlendFactor = 0.7
             }
         }
         
@@ -3686,7 +3684,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         // Reset existing spheres to their defaults
         enumerateChildNodes(withName: "sphere") { node, _ in
-            if let sphereNode = node as? SKShapeNode,
+            if let sphereNode = node as? SKSpriteNode,
                let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
                activePowerUps.contains("Super Massive Ball") {
                 node.physicsBody?.restitution = 0.3 // Super Massive Ball restitution
@@ -3724,7 +3722,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         // Reset existing spheres to their defaults
         enumerateChildNodes(withName: "sphere") { node, _ in
-            if let sphereNode = node as? SKShapeNode,
+            if let sphereNode = node as? SKSpriteNode,
                let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
                activePowerUps.contains("Super Massive Ball") {
                 node.physicsBody?.friction = 0.15 // Super Massive Ball friction
@@ -3761,7 +3759,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             #endif
             self?.enumerateChildNodes(withName: "sphere") { node, _ in
                 if let body = node.physicsBody {
-                    if let sphereNode = node as? SKShapeNode,
+                    if let sphereNode = node as? SKSpriteNode,
                        let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
                        activePowerUps.contains("Super Massive Ball") {
                         body.linearDamping = 0.05
