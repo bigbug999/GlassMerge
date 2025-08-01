@@ -1364,7 +1364,6 @@ struct ContentView: View {
         case mainMenu
         case game
         case upgradeShop
-        case collection
         case settings
         case runSetup
     }
@@ -1390,8 +1389,6 @@ struct ContentView: View {
                     }
                 case .upgradeShop:
                     UpgradeShopView(currentScreen: $currentScreen)
-                case .collection:
-                    CollectionView(currentScreen: $currentScreen)
                 case .settings:
                     SettingsView(currentScreen: $currentScreen)
                 case .runSetup:
@@ -1417,78 +1414,61 @@ struct MainMenuView: View {
     
     var body: some View {
         VStack(spacing: 20) {
+            Spacer()
+            
             Text("Glass Merge")
                 .font(.largeTitle)
                 .fontWeight(.bold)
-
-            if highScore > 0 {
-                Text("High Score: \(highScore)")
-                    .font(.title2)
-                    .foregroundColor(.gray)
-            }
-            
-            Text("Coins: \(powerUpManager.currency)")
-                .font(.title2)
-                .foregroundColor(.yellow)
+                .padding(.bottom, 30)
             
             VStack(spacing: 15) {
                 Button("New Game") {
                     onNewGame?()
                     currentScreen = .runSetup
                 }
-                .buttonStyle(.borderedProminent)
+                .frame(width: 200)
+                .buttonStyle(.bordered)
+                .tint(.white)
                 
                 Button("Continue") {
                     onContinue?()
                     currentScreen = .game
                 }
+                .frame(width: 200)
                 .buttonStyle(.bordered)
+                .tint(.white)
                 .disabled(!hasSave)
                 
                 Button("Upgrade Shop") {
                     currentScreen = .upgradeShop
                 }
+                .frame(width: 200)
                 .buttonStyle(.bordered)
-                
-                Button("Collection") {
-                    currentScreen = .collection
-                }
-                .buttonStyle(.bordered)
+                .tint(.white)
                 
                 Button("Settings") {
                     currentScreen = .settings
                 }
+                .frame(width: 200)
                 .buttonStyle(.bordered)
+                .tint(.white)
             }
-            .padding()
-
-            #if DEBUG
-            VStack {
-                Text("Debug Tools")
-                    .font(.headline)
-                    .padding(.top)
-
-                Button("Reset Progress") {
-                    CoreDataManager.shared.resetGameData()
-                    // Reload data to reflect changes
-                    powerUpManager.loadProgression()
-                    highScore = 0
+            .padding(.horizontal)
+            
+            Spacer()
+            
+            VStack(spacing: 10) {
+                if highScore > 0 {
+                    Text("High Score: \(highScore)")
+                        .font(.title2)
+                        .foregroundColor(.gray)
                 }
-                .buttonStyle(.bordered)
-                .tint(.red)
                 
-                Button("Add 1000 Coins") {
-                    powerUpManager.currency += 1000
-                    let gameData = CoreDataManager.shared.getGameData()
-                    gameData.currency = Int64(powerUpManager.currency)
-                    CoreDataManager.shared.saveContext()
-                }
-                .buttonStyle(.bordered)
+                Text("Coins: \(powerUpManager.currency)")
+                    .font(.title2)
+                    .foregroundColor(.yellow)
             }
-            .padding()
-            .background(Color.gray.opacity(0.2))
-            .cornerRadius(10)
-            #endif
+            .padding(.bottom, 30)
         }
         .onAppear {
             hasSave = CoreDataManager.shared.hasActiveRun()
@@ -1906,80 +1886,57 @@ struct PowerUpSlot: View {
     }
 }
 
-struct PauseMenuView: View {
+struct DebugMenuView: View {
     @ObservedObject var viewModel: GameViewModel
     @Binding var isPaused: Bool
-    @Binding var currentScreen: ContentView.GameScreen
-    var onMainMenu: (() -> Void)? = nil
+    @Binding var showDebugMenu: Bool
     
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Paused")
+        VStack(spacing: 10) {
+            HStack {
+                Button(action: {
+                    isPaused = true
+                    showDebugMenu = false
+                }) {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
+                }
+                .padding()
+                Spacer()
+            }
+            
+            Text("Debug Tools")
                 .font(.title)
                 .fontWeight(.bold)
                 .padding(.bottom, 20)
                 .foregroundColor(.white)
             
-            Button(action: {
+            Button("Trigger Level Up") {
+                viewModel.debug_triggerLevelUp()
                 isPaused = false
-            }) {
-                HStack {
-                    Image(systemName: "play.fill")
-                    Text("Resume")
-                }
-                .frame(width: 200)
-            }
-            .buttonStyle(.borderedProminent)
-            
-            Button(action: {
-                onMainMenu?()
-                currentScreen = .mainMenu
-            }) {
-                HStack {
-                    Image(systemName: "house.fill")
-                    Text("Main Menu")
-                }
-                .frame(width: 200)
             }
             .buttonStyle(.bordered)
+            .frame(width: 200)
             
-            #if DEBUG
-            VStack(spacing: 10) {
-                Text("Debug Tools")
-                    .font(.headline)
-                    .padding(.top)
-
-                Button("Trigger Level Up") {
-                    viewModel.debug_triggerLevelUp()
+            VStack {
+                HStack {
+                    Text("Spawn Tier:")
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text("\(viewModel.debug_spawnBallTierSelection)")
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                    Stepper("", value: $viewModel.debug_spawnBallTierSelection, in: 1...(GameScene.tierData.count))
+                        .labelsHidden()
+                }
+                Button("Spawn") {
+                    viewModel.debug_spawnBall()
                     isPaused = false
                 }
                 .buttonStyle(.bordered)
-                .frame(width: 200)
-                
-                VStack {
-                    HStack {
-                        Text("Spawn Tier:")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Text("\(viewModel.debug_spawnBallTierSelection)")
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 4)
-                        Stepper("", value: $viewModel.debug_spawnBallTierSelection, in: 1...(GameScene.tierData.count))
-                            .labelsHidden()
-                    }
-                    Button("Spawn") {
-                        viewModel.debug_spawnBall()
-                        isPaused = false
-                    }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
-                }
-                .frame(width: 200)
+                .frame(maxWidth: .infinity)
             }
-            .padding()
-            .background(Color.gray.opacity(0.2))
-            .cornerRadius(10)
-            #endif
+            .frame(width: 200)
         }
         .padding(40)
         .background(
@@ -1988,6 +1945,77 @@ struct PauseMenuView: View {
                 .shadow(radius: 10)
         )
         .foregroundColor(.white)
+    }
+}
+
+struct PauseMenuView: View {
+    @ObservedObject var viewModel: GameViewModel
+    @Binding var isPaused: Bool
+    @Binding var currentScreen: ContentView.GameScreen
+    @State private var showDebugMenu: Bool = false
+    var onMainMenu: (() -> Void)? = nil
+    
+    var body: some View {
+        ZStack {
+            VStack(spacing: 20) {
+                Text("Paused")
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .padding(.bottom, 20)
+                    .foregroundColor(.white)
+                
+                Button(action: {
+                    isPaused = false
+                }) {
+                    HStack {
+                        Image(systemName: "play.fill")
+                        Text("Resume")
+                    }
+                    .frame(width: 200)
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button(action: {
+                    onMainMenu?()
+                    currentScreen = .mainMenu
+                }) {
+                    HStack {
+                        Image(systemName: "house.fill")
+                        Text("Main Menu")
+                    }
+                    .frame(width: 200)
+                }
+                .buttonStyle(.bordered)
+                
+                #if DEBUG
+                Button(action: {
+                    showDebugMenu = true
+                }) {
+                    HStack {
+                        Image(systemName: "hammer.fill")
+                        Text("Debug Menu")
+                    }
+                    .frame(width: 200)
+                }
+                .buttonStyle(.bordered)
+                #endif
+            }
+            .padding(40)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color(white: 0.15))
+                    .shadow(radius: 10)
+            )
+            .foregroundColor(.white)
+            
+            if showDebugMenu {
+                Color.black.opacity(0.7)
+                    .edgesIgnoringSafeArea(.all)
+                    .transition(.opacity)
+                
+                DebugMenuView(viewModel: viewModel, isPaused: $isPaused, showDebugMenu: $showDebugMenu)
+            }
+        }
     }
 }
 
@@ -2163,50 +2191,10 @@ struct UpgradeShopView: View {
     }
 }
 
-struct CollectionView: View {
-    @Binding var currentScreen: ContentView.GameScreen
-    @StateObject private var powerUpManager = PowerUpManager()
-    let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
-    
-    var body: some View {
-        VStack {
-            HStack {
-                Button(action: {
-                    currentScreen = .mainMenu
-                }) {
-                    Image(systemName: "chevron.left")
-                    Text("Back")
-                }
-                .padding()
-                Spacer()
-            }
-            
-            Text("Collection")
-                .font(.title)
-                .padding(.bottom)
-            
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(powerUpManager.powerUps) { powerUp in
-                        VStack {
-                            PowerUpSlot(powerUp: powerUp)
-                            Text(powerUp.name)
-                                .font(.caption)
-                                .multilineTextAlignment(.center)
-                            Text("Level \(powerUp.level)")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
-                        }
-                    }
-                }
-                .padding()
-            }
-        }
-    }
-}
 
 struct SettingsView: View {
     @Binding var currentScreen: ContentView.GameScreen
+    @StateObject private var powerUpManager = PowerUpManager()
     
     var body: some View {
         VStack {
@@ -2221,9 +2209,39 @@ struct SettingsView: View {
                 Spacer()
             }
             
-            Spacer()
             Text("Settings")
                 .font(.title)
+                .padding(.bottom)
+            
+            Spacer()
+            
+            #if DEBUG
+            VStack {
+                Text("Debug Tools")
+                    .font(.headline)
+                    .padding(.top)
+
+                Button("Reset Progress") {
+                    CoreDataManager.shared.resetGameData()
+                    // Reload data to reflect changes
+                    powerUpManager.loadProgression()
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                
+                Button("Add 1000 Coins") {
+                    powerUpManager.currency += 1000
+                    let gameData = CoreDataManager.shared.getGameData()
+                    gameData.currency = Int64(powerUpManager.currency)
+                    CoreDataManager.shared.saveContext()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(10)
+            #endif
+            
             Spacer()
         }
     }
