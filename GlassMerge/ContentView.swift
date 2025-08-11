@@ -487,7 +487,15 @@ class GameViewModel: ObservableObject {
     
     #if DEBUG
     @Published var debug_spawnBallTier: Int? = nil
-    @Published var debug_spawnBallTierSelection: Int = 1
+    @Published var debug_spawnBallTierSelection: Int = 1 {
+        didSet {
+            if debug_spawnBallTierSelection < 1 {
+                debug_spawnBallTierSelection = 1
+            } else if debug_spawnBallTierSelection > GameScene.tierData.count {
+                debug_spawnBallTierSelection = GameScene.tierData.count
+            }
+        }
+    }
     #endif
     
     // Define a type to represent either a new power-up or an upgrade
@@ -1416,9 +1424,10 @@ struct MainMenuView: View {
         VStack(spacing: 20) {
             Spacer()
             
-            Text("Glass Merge")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+            Image("alkhemlogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 200)
                 .padding(.bottom, 30)
             
             VStack(spacing: 15) {
@@ -1912,7 +1921,9 @@ struct DebugMenuView: View {
                 .foregroundColor(.white)
             
             Button("Trigger Level Up") {
-                viewModel.debug_triggerLevelUp()
+                #if DEBUG
+                viewModel.presentLevelUpChoices()
+                #endif
                 isPaused = false
             }
             .buttonStyle(.bordered)
@@ -1923,14 +1934,24 @@ struct DebugMenuView: View {
                     Text("Spawn Tier:")
                         .foregroundColor(.white)
                     Spacer()
+                    #if DEBUG
                     Text("\(viewModel.debug_spawnBallTierSelection)")
                         .foregroundColor(.white)
                         .padding(.horizontal, 4)
-                    Stepper("", value: $viewModel.debug_spawnBallTierSelection, in: 1...(GameScene.tierData.count))
-                        .labelsHidden()
+                    Stepper("", 
+                        value: .init(
+                            get: { viewModel.debug_spawnBallTierSelection },
+                            set: { viewModel.debug_spawnBallTierSelection = $0 }
+                        ),
+                        in: 1...(GameScene.tierData.count)
+                    )
+                    .labelsHidden()
+                    #endif
                 }
                 Button("Spawn") {
-                    viewModel.debug_spawnBall()
+                    #if DEBUG
+                    viewModel.debug_spawnBallTier = viewModel.debug_spawnBallTierSelection
+                    #endif
                     isPaused = false
                 }
                 .buttonStyle(.bordered)
