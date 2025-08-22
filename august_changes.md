@@ -91,16 +91,21 @@ This group of tasks focuses on improving the tactile feel of the game. They are 
   - Add optional color tinting
   - Consider adding secondary effects (e.g., shockwave)
 
-### 5. Add Trajectory Preview
+### 5. Add Trajectory Preview ❌
 - **Complexity**: Large
 - **Description**: Implement a system to show the player where a ball will land before they drop it. This will involve ray-casting or physics simulation to predict the trajectory and drawing a visual indicator on the screen.
+- **Status**: Cancelled - Task deprioritized
+
+### 6. Holographic Shader Test
+- **Complexity**: Medium
+- **Description**: Create a holographic shader effect for vector shapes. The effect will be a rainbow gradient that shifts based on the accelerometer's input. The initial test will involve applying this effect to a rectangle at the bottom of the home screen.
 
 ---
 
 ## II. Progression System Refactor
 
 - **Complexity**: Large
-- **Description**: A complete overhaul of the out-of-game progression systems. This involves removing the current in-game leveling mechanics and introducing a new system for unlocking and upgrading power-ups.
+- **Description**: A complete overwhaul of the out-of-game progression systems. This involves removing the current in-game leveling mechanics and introducing a new system for unlocking and upgrading power-ups.
 - **Core Tasks**:
     - Refactor meta progression system
     - Refactor power-ups to be leveled in the shop

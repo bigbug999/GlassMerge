@@ -29,6 +29,8 @@
 
 /* Begin PBXFileReference section */
 		2E2FDD962E15B652009DFA1C /* GlassMerge.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = GlassMerge.xcdatamodel; sourceTree = "<group>"; };
+		2E2FDD982E15B652009DFA1D /* RainbowGradient.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = RainbowGradient.metal; sourceTree = "<group>"; };
+		2E2FDD992E15B652009DFA1E /* RainbowGradientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RainbowGradientView.swift; sourceTree = "<group>"; };
 		2EC24AB12DF76A5D00175406 /* GlassMerge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlassMerge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2EC24ABF2DF76A5F00175406 /* GlassMergeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GlassMergeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2EC24AC92DF76A5F00175406 /* GlassMergeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GlassMergeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -247,6 +249,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				2E2FDD972E15B652009DFA1C /* GlassMerge.xcdatamodeld in Sources */,
+				2E2FDD982E15B652009DFA1D /* RainbowGradient.metal in Sources */,
+				2E2FDD992E15B652009DFA1E /* RainbowGradientView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

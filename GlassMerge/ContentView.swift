@@ -1408,73 +1408,90 @@ struct MainMenuView: View {
     @State private var hasSave: Bool = CoreDataManager.shared.hasActiveRun()
     @State private var highScore: Int = 0
     @StateObject private var powerUpManager = PowerUpManager()
+    @StateObject private var motion = Motion()
     var onNewGame: (() -> Void)? = nil
     var onContinue: (() -> Void)? = nil
+
+    private var scene: MainMenuScene {
+        let scene = MainMenuScene(size: UIScreen.main.bounds.size, motion: motion)
+        scene.scaleMode = .resizeFill
+        return scene
+    }
     
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            
-            Image("alkhemlogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 200)
-                .padding(.bottom, 30)
-            
-            VStack(spacing: 15) {
-                Button("New Game") {
-                    onNewGame?()
-                    currentScreen = .runSetup
-                }
-                .frame(width: 200)
-                .buttonStyle(.bordered)
-                .tint(.white)
-                
-                Button("Continue") {
-                    onContinue?()
-                    currentScreen = .game
-                }
-                .frame(width: 200)
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .disabled(!hasSave)
-                
-                Button("Upgrade Shop") {
-                    currentScreen = .upgradeShop
-                }
-                .frame(width: 200)
-                .buttonStyle(.bordered)
-                .tint(.white)
-                
-                Button("Settings") {
-                    currentScreen = .settings
-                }
-                .frame(width: 200)
-                .buttonStyle(.bordered)
-                .tint(.white)
+        ZStack {
+            // Background holographic effect
+            VStack {
+                Spacer()
+                SpriteView(scene: scene, options: [.allowsTransparency])
+                    .frame(height: 50)
             }
-            .padding(.horizontal)
-            
-            Spacer()
-            
-            VStack(spacing: 10) {
-                if highScore > 0 {
-                    Text("High Score: \(highScore)")
+            .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Spacer()
+                
+                Image("alkhemlogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 200)
+                    .padding(.bottom, 30)
+                
+                VStack(spacing: 15) {
+                    Button("New Game") {
+                        onNewGame?()
+                        currentScreen = .runSetup
+                    }
+                    .frame(width: 200)
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    
+                    Button("Continue") {
+                        onContinue?()
+                        currentScreen = .game
+                    }
+                    .frame(width: 200)
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    .disabled(!hasSave)
+                    
+                    Button("Upgrade Shop") {
+                        currentScreen = .upgradeShop
+                    }
+                    .frame(width: 200)
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    
+                    Button("Settings") {
+                        currentScreen = .settings
+                    }
+                    .frame(width: 200)
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                }
+                .padding(.horizontal)
+                
+                Spacer()
+                
+                VStack(spacing: 10) {
+                    if highScore > 0 {
+                        Text("High Score: \(highScore)")
+                            .font(.title2)
+                            .foregroundColor(.gray)
+                    }
+                    
+                    Text("Coins: \(powerUpManager.currency)")
                         .font(.title2)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.yellow)
                 }
-                
-                Text("Coins: \(powerUpManager.currency)")
-                    .font(.title2)
-                    .foregroundColor(.yellow)
+                .padding(.bottom, 30)
             }
-            .padding(.bottom, 30)
-        }
-        .onAppear {
-            hasSave = CoreDataManager.shared.hasActiveRun()
-            highScore = Int(CoreDataManager.shared.getGameData().highScore)
-            // The powerUpManager now loads its own data, so we just need to trigger a view update.
-            // By being a @StateObject, it will reload when the view appears.
+            .onAppear {
+                hasSave = CoreDataManager.shared.hasActiveRun()
+                highScore = Int(CoreDataManager.shared.getGameData().highScore)
+                // The powerUpManager now loads its own data, so we just need to trigger a view update.
+                // By being a @StateObject, it will reload when the view appears.
+            }
         }
     }
 }
