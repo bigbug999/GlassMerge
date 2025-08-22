@@ -103,7 +103,7 @@ struct PowerUpStats {
         case "Rubber World":
             return PowerUpStats(duration: 60, forceMagnitude: 1.5)
         case "Ice World":
-            return PowerUpStats(duration: 60, forceMagnitude: 0.1)
+            return PowerUpStats(duration: 60, forceMagnitude: 0.01) // Extremely slippery
         case "Tilt World":
             return PowerUpStats(duration: 45, forceMagnitude: 1.0)
             
@@ -133,18 +133,9 @@ struct PowerUpStats {
                 break
             }
         } else if duration != nil { // This identifies all environmental power-ups
-             if abs(forceMagnitude - 0.1) < 0.001 { // This identifies Ice World
-                // New scaling for Ice World: lower friction is better
-                switch level {
-                case 1:
-                    stats.forceMagnitude = 0.1 // Default friction
-                case 2:
-                    stats.forceMagnitude = 0.05 // More slippery
-                case 3:
-                    stats.forceMagnitude = 0.01 // Ultra slippery
-                default:
-                    break
-                }
+             if abs(forceMagnitude - 0.01) < 0.001 { // This identifies Ice World
+                // Ice World has no level scaling - always extremely slippery
+                stats.forceMagnitude = 0.01
             }
             // For other environmental power-ups like Low Gravity and Rubber World,
             // we will apply scaling only to their forceMagnitude, not duration.
@@ -3035,9 +3026,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             
             addPhysics(to: sphereToDrop)
             
-            #if os(iOS)
-            HapticManager.shared.playDropHaptic()
-            #endif
+            // Drop haptics removed to reduce feedback noise
             
             self.currentSphere = nil
             
@@ -3269,7 +3258,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
            activePowerUps.contains("Super Massive Ball") {
             // Super Massive Ball specific physics properties
             body.restitution = 0.3  // More bouncy
-            body.friction = 0.15    // Less friction, increased from 0.1
+            body.friction = 0.5    // Same as normal spheres
             body.linearDamping = 0.05  // Much less air resistance
             body.angularDamping = 0.05
             
@@ -3310,7 +3299,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         } else {
             // Normal ball physics properties
             body.restitution = 0.1
-            body.friction = 0.4 // Increased from 0.3
+            body.friction = 0.5 // Base friction for normal spheres
             body.linearDamping = 0.1
             body.angularDamping = 0.1
             
@@ -3582,9 +3571,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         targetingCircle.path = path
         targetingCircle.position = sphere.position
         
-        #if os(iOS)
-        HapticManager.shared.playDropHaptic()
-        #endif
+        // Drop haptics removed to reduce feedback noise
     }
     
     private func deselectSphere() {
@@ -3757,16 +3744,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private func resetIceWorldEffect() {
         // Reset walls to default
-        self.physicsBody?.friction = 0.2
+        self.physicsBody?.friction = 0.3 // Wall friction
         
         // Reset existing spheres to their defaults
         enumerateChildNodes(withName: "sphere") { node, _ in
             if let sphereNode = node as? SKSpriteNode,
                let activePowerUps = sphereNode.userData?["activePowerUps"] as? [String],
                activePowerUps.contains("Super Massive Ball") {
-                node.physicsBody?.friction = 0.15 // Super Massive Ball friction
+                node.physicsBody?.friction = 0.5 // Same as normal spheres
             } else {
-                node.physicsBody?.friction = 0.4 // Default sphere friction
+                node.physicsBody?.friction = 0.5 // Default sphere friction
             }
         }
         
@@ -3843,9 +3830,58 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 class HapticManager {
     static let shared = HapticManager()
     private var engine: CHHapticEngine?
+    private var lastMergeTime: TimeInterval = 0
+    private let mergeCooldown: TimeInterval = 0.2 // 200ms cooldown between haptics
+    private var queuedHaptics: [TimeInterval] = []
+    private var isProcessingQueue = false
     
     init() {
         prepareHaptics()
+    }
+    
+    private func processHapticQueue() {
+        guard !isProcessingQueue else { return }
+        isProcessingQueue = true
+        
+        // Process all queued haptics
+        while !queuedHaptics.isEmpty {
+            let nextHapticTime = queuedHaptics[0]
+            let currentTime = Date().timeIntervalSinceReferenceDate
+            
+            if currentTime >= nextHapticTime {
+                queuedHaptics.removeFirst()
+                playHapticImmediately()
+                lastMergeTime = currentTime
+            } else {
+                // Wait until the next haptic should be played
+                DispatchQueue.main.asyncAfter(deadline: .now() + (nextHapticTime - currentTime)) {
+                    self.processHapticQueue()
+                }
+                break
+            }
+        }
+        
+        isProcessingQueue = false
+    }
+    
+    private func playHapticImmediately() {
+        guard let engine = engine else { return }
+        
+        do {
+            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0)
+            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 1.0)
+            let event = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity, sharpness], relativeTime: 0)
+            
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: 0)
+            
+            #if DEBUG
+            print("Merge haptic played at: \(Date().timeIntervalSinceReferenceDate)")
+            #endif
+        } catch {
+            print("Failed to play merge haptic: \(error.localizedDescription)")
+        }
     }
     
     func prepareHaptics() {
@@ -3873,35 +3909,28 @@ class HapticManager {
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics,
               let engine = engine else { return }
         
-        do {
-            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0)
-            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 1.0)
-            let event = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity, sharpness], relativeTime: 0)
+        let currentTime = Date().timeIntervalSinceReferenceDate
+        
+        // If we're not in cooldown, play immediately
+        if currentTime - lastMergeTime >= mergeCooldown {
+            playHapticImmediately()
+            lastMergeTime = currentTime
+        } else {
+            // Queue the haptic to play after the cooldown
+            let nextPlayTime = lastMergeTime + mergeCooldown
+            queuedHaptics.append(nextPlayTime)
+            queuedHaptics.sort() // Keep the queue ordered by time
             
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            let player = try engine.makePlayer(with: pattern)
-            try player.start(atTime: 0)
-        } catch {
-            print("Failed to play merge haptic: \(error.localizedDescription)")
+            #if DEBUG
+            print("Haptic queued for: \(nextPlayTime)")
+            #endif
+            
+            // Start processing the queue if not already processing
+            processHapticQueue()
         }
     }
     
-    func playDropHaptic() {
-        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics,
-              let engine = engine else { return }
-        
-        do {
-            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.4)
-            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
-            let event = CHHapticEvent(eventType: .hapticTransient, parameters: [intensity, sharpness], relativeTime: 0)
-            
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            let player = try engine.makePlayer(with: pattern)
-            try player.start(atTime: 0)
-        } catch {
-            print("Failed to play drop haptic: \(error.localizedDescription)")
-        }
-    }
+    // Drop haptics removed to reduce feedback noise
 }
 #else
 struct SpriteKitContainer: View {
