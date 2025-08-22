@@ -2927,6 +2927,44 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return sphere
     }
     
+    private func createMergeEffect(at position: CGPoint, radius: CGFloat, tier: Int) -> SKEmitterNode {
+        let emitter = SKEmitterNode()
+        
+        // Use the same texture as the ball that was created
+        let texture = SKTexture(imageNamed: "ball_\(tier)")
+        emitter.particleTexture = texture
+        
+        // Particle properties
+        emitter.particleBirthRate = 80 // Emit particles quickly
+        emitter.numParticlesToEmit = 8 // 8 particles total
+        emitter.particleLifetime = 0.3
+        emitter.particleLifetimeRange = 0.1
+        
+        // Size and scale
+        emitter.particleSize = CGSize(width: radius * 0.8, height: radius * 0.8)
+        emitter.xAcceleration = 0
+        emitter.yAcceleration = 0
+        
+        // Radial movement
+        emitter.particleSpeed = radius * 3.0 // Move outward quickly
+        emitter.particleSpeedRange = radius * 0.5
+        emitter.emissionAngle = 0
+        emitter.emissionAngleRange = .pi * 2 // Full 360 degrees
+        
+        // Appearance
+        emitter.particleAlpha = 1.0 // Start fully opaque
+        emitter.particleAlphaSpeed = -3.0 // Fade out rate
+        emitter.particleAlphaRange = 0.2
+        emitter.particleScale = 1.0
+        emitter.particleScaleSpeed = -1.0 // Shrink as they move
+        
+        // Simple appearance without any blending
+        emitter.particleColor = .white
+        
+        emitter.position = position
+        return emitter
+    }
+
     func createAndPlaceSphere(at position: CGPoint, tier: Int, activePowerUps: [String] = []) -> SKSpriteNode? {
         guard let sphere = createSphereNode(tier: tier) else { return nil }
         sphere.position = position
@@ -3220,10 +3258,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 let middlePoint = CGPoint(x: (nodeA.position.x + nodeB.position.x) / 2,
                                           y: (nodeA.position.y + nodeB.position.y) / 2)
                 
+                // Create merge effect
+                // Calculate exact center point and size for effect
+                let mergeRadius = max(nodeA.size.width, nodeB.size.width)
+                let effectCenter = CGPoint(
+                    x: middlePoint.x,
+                    y: middlePoint.y + (mergeRadius * 0.1) // Slight upward adjustment for visual balance
+                )
+                
                 nodeA.removeFromParent()
                 nodeB.removeFromParent()
                 
                 if let newSphere = createAndPlaceSphere(at: middlePoint, tier: nextTier) {
+                    // Create and attach merge effect to the new sphere
+                    let mergeEffect = createMergeEffect(at: .zero, radius: mergeRadius, tier: nextTier) // Position at 0,0 since it's relative to parent
+                    newSphere.addChild(mergeEffect)
+                    
+                    // Remove effect after animation
+                    let effectDuration: TimeInterval = 0.3
+                    newSphere.run(SKAction.wait(forDuration: effectDuration)) {
+                        mergeEffect.removeFromParent()
+                    }
                     // Make merged spheres immediately "live" for the danger zone
                     newSphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
                 }

@@ -8,80 +8,88 @@ This document outlines the planned changes for GlassMerge, grouped by area of fo
 
 This group of tasks focuses on improving the tactile feel of the game. They are relatively small and can be implemented independently.
 
-### 1. Increase Base Friction
+### 1. Increase Base Friction ✅
 - **Complexity**: Small
 - **Description**: Increase the base friction of all spheres to make power-ups that reduce friction (like "Ice World") more impactful. This is a simple change to the default physics properties in `ContentView.swift`.
+- **Implementation**:
+    - Set base sphere friction to 0.5
+    - Set wall friction to 0.3
+    - Unified Super Massive Ball friction with normal spheres
+    - Commit: [a90e8d1]
 
-### 2. Increase Jostle Physics on Merge
+### 2. Increase Jostle Physics on Merge ❌
 - **Complexity**: Small
 - **Description**: When spheres merge, apply a small outward force to nearby spheres to create a more dynamic and satisfying "jostle" effect. This will involve locating the merge logic in the `SKPhysicsContactDelegate` methods and applying an impulse to surrounding bodies.
+- **Status**: Cancelled - Task deprioritized
 
-### 3. Refine Haptic Feedback
+### 3. Refine Haptic Feedback ✅
 - **Complexity**: Medium-Large
 - **Description**: The haptic feedback system needs refinement to provide better tactile response during gameplay. Currently, rapid merge sequences create overwhelming feedback, and unnecessary haptics on ball drops distract from the core experience.
 
-  **Current Implementation**:
-    - Direct haptic calls in `HapticManager` singleton
-    - No timing control or debouncing
-    - Haptics fire immediately for every merge
-    - Full intensity (1.0) for all merges regardless of significance
-    - Drop haptics at 0.4 intensity
-    
-  **Current Issues**:
-    - Overwhelming feedback during chain reactions
-    - Every merge triggers a full-intensity haptic
-    - No cooldown between haptic events
-    - Unnecessary haptic feedback on ball drops
-    - Performance impact from rapid haptic calls
-    - Debug logging cluttering haptic-related code
+  **Implementation Details**:
+    - Removed all ball drop haptics to reduce feedback noise
+    - Added proper haptic debouncing system:
+        - Queue-based implementation that preserves all haptic events
+        - 200ms cooldown between haptic triggers
+        - Events play in sequence with consistent timing
+        - Debug logging for haptic timing and queue state
+    - Improved `HapticManager` architecture:
+        - Added queue management system
+        - Implemented proper state tracking
+        - Added safeguards against queue processing races
+    - Commit: [a90e8d1]
 
-  **Technical Analysis**:
-    - Current Implementation:
-      ```swift
-      // Merge haptics
-      let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0)
-      let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 1.0)
-      
-      // Drop haptics (to be removed)
-      let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.4)
-      let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
-      ```
+  **Technical Notes**:
+    - Uses `TimeInterval` for precise timing control
+    - Queue system ensures no haptics are lost during chain reactions
+    - Automatic queue processing with async dispatch
+    - Thread-safe implementation with queue state tracking
 
-  **Proposed Solution**:
-    1. **Core Changes**:
-       - Implement a debounce manager for haptic events
-       - Remove ball drop haptics entirely
-       - Add haptic cooldown system
-       - Scale haptic intensity with merge tier
-    
-    2. **Technical Implementation**:
-       - Create `HapticDebounceManager` class to handle event timing
-       - Use combine/timer-based debouncing with ~100ms cooldown
-       - Implement merge-tier-based intensity scaling
-       - Add haptic presets for different game events
-       - Clean up debug logging
-    
-    3. **New Features**:
-       - Smart haptic coalescing for rapid merges
-       - Progressive intensity based on merge chain length
-       - Distinct haptic patterns for special events
-       - Optional haptic preferences for players
-    
-  **Expected Impact**:
-    - More satisfying merge feedback
-    - Reduced haptic fatigue during gameplay
-    - Better performance due to reduced haptic calls
-    - Clearer distinction between different game events
+
+
+  **Results**:
+    - More satisfying merge feedback with consistent timing
+    - No haptic fatigue during chain reactions
+    - Better performance through optimized haptic calls
+    - Cleaner, more maintainable haptic system
     - Improved overall game feel
 
-  **Dependencies**:
-    - CoreHaptics framework
-    - Merge detection system
-    - Game state management
-
-### 4. Add Merge Animation
+### 4. Add Merge Animation ✅
 - **Complexity**: Medium
-- **Description**: Instead of spheres instantly disappearing and a new one appearing on merge, we will add a small, satisfying animation. This could involve a flash, a particle effect, or the two spheres visibly shrinking into the new, larger one.
+- **Description**: Added a particle-based merge animation that follows the merged ball.
+
+  **Implementation Details**:
+  - Created `createMergeEffect` function in `GameScene`
+  - Particle effect attaches to and moves with the merged ball
+  - Uses same texture as the merged ball for consistency
+  - Duration: 0.3 seconds
+  - Commit: [a90e8d1]
+
+  **Key Parameters for Future Refinement**:
+  ```swift
+  // Particle emission
+  emitter.particleBirthRate = 80
+  emitter.numParticlesToEmit = 8
+  emitter.particleLifetime = 0.3
+  
+  // Size and movement
+  emitter.particleSize = radius * 0.8
+  emitter.particleSpeed = radius * 3.0
+  emitter.particleSpeedRange = radius * 0.5
+  
+  // Appearance
+  emitter.particleAlpha = 1.0
+  emitter.particleAlphaSpeed = -3.0
+  emitter.particleScale = 1.0
+  emitter.particleScaleSpeed = -1.0
+  ```
+
+  **Potential Future Improvements**:
+  - Fine-tune particle count and distribution
+  - Adjust particle size relative to ball size
+  - Experiment with different fade-out patterns
+  - Add optional color tinting
+  - Consider adding secondary effects (e.g., shockwave)
 
 ### 5. Add Trajectory Preview
 - **Complexity**: Large
