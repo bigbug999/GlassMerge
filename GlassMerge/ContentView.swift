@@ -2927,42 +2927,37 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return sphere
     }
     
-    private func createMergeEffect(at position: CGPoint, radius: CGFloat, tier: Int) -> SKEmitterNode {
-        let emitter = SKEmitterNode()
+    private func createMergeAnimation(radius: CGFloat) -> SKSpriteNode {
+        // 1. Load Animation Frames
+        var frames: [SKTexture] = []
+        let atlas = SKTextureAtlas(named: "MergeEffect")
+        let numImages = atlas.textureNames.count
+        for i in 0..<numImages {
+            let textureName = String(format: "frame_%02d", i)
+            frames.append(atlas.textureNamed(textureName))
+        }
+
+        // 2. Create the Animation Action
+        let timePerFrame = 0.02 // ~50 FPS, even faster
+        let animationAction = SKAction.animate(with: frames, timePerFrame: timePerFrame, resize: false, restore: true)
+
+        // 3. Create the Sprite Node
+        let firstFrameTexture = frames[0]
+        let animationNode = SKSpriteNode(texture: firstFrameTexture)
+        animationNode.zPosition = 1 // Render on top of the ball
         
-        // Use the same texture as the ball that was created
-        let texture = SKTexture(imageNamed: "ball_\(tier)")
-        emitter.particleTexture = texture
+        // Scale the animation to match the merged ball size
+        let animationSize = radius * 1.5 // Even smaller for a very tight effect
+        animationNode.size = CGSize(width: animationSize, height: animationSize)
         
-        // Particle properties
-        emitter.particleBirthRate = 80 // Emit particles quickly
-        emitter.numParticlesToEmit = 8 // 8 particles total
-        emitter.particleLifetime = 0.3
-        emitter.particleLifetimeRange = 0.1
-        
-        // Size and scale
-        emitter.particleSize = CGSize(width: radius * 0.8, height: radius * 0.8)
-        emitter.xAcceleration = 0
-        emitter.yAcceleration = 0
-        
-        // Radial movement
-        emitter.particleSpeed = radius * 3.0 // Move outward quickly
-        emitter.particleSpeedRange = radius * 0.5
-        emitter.emissionAngle = 0
-        emitter.emissionAngleRange = .pi * 2 // Full 360 degrees
-        
-        // Appearance
-        emitter.particleAlpha = 1.0 // Start fully opaque
-        emitter.particleAlphaSpeed = -3.0 // Fade out rate
-        emitter.particleAlphaRange = 0.2
-        emitter.particleScale = 1.0
-        emitter.particleScaleSpeed = -1.0 // Shrink as they move
-        
-        // Simple appearance without any blending
-        emitter.particleColor = .white
-        
-        emitter.position = position
-        return emitter
+        // 4. Run Animation and Cleanup
+        let sequence = SKAction.sequence([
+            animationAction,
+            SKAction.removeFromParent()
+        ])
+        animationNode.run(sequence)
+
+        return animationNode
     }
 
     func createAndPlaceSphere(at position: CGPoint, tier: Int, activePowerUps: [String] = []) -> SKSpriteNode? {
@@ -3271,14 +3266,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 
                 if let newSphere = createAndPlaceSphere(at: middlePoint, tier: nextTier) {
                     // Create and attach merge effect to the new sphere
-                    let mergeEffect = createMergeEffect(at: .zero, radius: mergeRadius, tier: nextTier) // Position at 0,0 since it's relative to parent
-                    newSphere.addChild(mergeEffect)
-                    
-                    // Remove effect after animation
-                    let effectDuration: TimeInterval = 0.3
-                    newSphere.run(SKAction.wait(forDuration: effectDuration)) {
-                        mergeEffect.removeFromParent()
-                    }
+                    let mergeAnimation = createMergeAnimation(radius: mergeRadius)
+                    newSphere.addChild(mergeAnimation)
+
                     // Make merged spheres immediately "live" for the danger zone
                     newSphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
                 }
