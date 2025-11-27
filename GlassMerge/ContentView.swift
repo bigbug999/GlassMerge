@@ -2670,6 +2670,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         setupDangerZone()
         setupEnvironmentalBorder()
         
+        warmUpMetaballEffect()
+        
         startAccelerometer()
         
         var restoredCurrentSphere = false
@@ -2909,6 +2911,57 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
     
+    // Generate a flat grey circle texture for a given tier
+    private func createGreyCircleTexture(radius: CGFloat, tier: Int, maxTier: Int) -> SKTexture {
+        let size = CGSize(width: radius * 2, height: radius * 2)
+        
+        #if os(iOS)
+        // Use Core Graphics on iOS for better performance
+        let scale: CGFloat = 2.0 // Use @2x scale for better quality
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size.width * scale, height: size.height * scale))
+        let greyValue = getGreyColorValue(for: tier, maxTier: maxTier)
+        let image = renderer.image { context in
+            let cgContext = context.cgContext
+            cgContext.setFillColor(red: greyValue, green: greyValue, blue: greyValue, alpha: 1.0)
+            cgContext.setStrokeColor(UIColor.clear.cgColor)
+            
+            // Draw circle
+            let rect = CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale)
+            cgContext.fillEllipse(in: rect)
+        }
+        return SKTexture(image: image)
+        #else
+        // Use SpriteKit shape node approach for macOS
+        let circle = SKShapeNode(circleOfRadius: radius)
+        circle.fillColor = getGreyColor(for: tier, maxTier: maxTier)
+        circle.strokeColor = .clear
+        circle.position = CGPoint(x: radius, y: radius)
+        
+        let textureScene = SKScene(size: size)
+        textureScene.backgroundColor = .clear
+        textureScene.addChild(circle)
+        
+        // Create a temporary view to render the texture
+        let view = SKView(frame: CGRect(origin: .zero, size: size))
+        let texture = view.texture(from: textureScene) ?? SKTexture()
+        return texture
+        #endif
+    }
+    
+    // Get grey color for a tier (lighter for lower tiers, darker for higher tiers)
+    private func getGreyColor(for tier: Int, maxTier: Int) -> SKColor {
+        let greyValue = getGreyColorValue(for: tier, maxTier: maxTier)
+        return SKColor(white: greyValue, alpha: 1.0)
+    }
+    
+    // Get grey color value (0.0 to 1.0) for a tier
+    private func getGreyColorValue(for tier: Int, maxTier: Int) -> CGFloat {
+        // Interpolate from light grey (0.8) to dark grey (0.2)
+        // Tier 1 = lightest, Tier maxTier = darkest
+        let normalizedTier = CGFloat(tier - 1) / CGFloat(maxTier - 1)
+        return 0.8 - (normalizedTier * 0.6) // Range from 0.8 to 0.2
+    }
+    
     func createSphereNode(tier: Int) -> SKSpriteNode? {
         guard tier >= 1 && tier <= GameScene.tierData.count else { return nil }
         
@@ -2916,7 +2969,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let tierInfo = GameScene.tierData[tierIndex]
         let scaledRadius = tierInfo.radius * ballScale
         
-        let sphere = SKSpriteNode(imageNamed: tierInfo.spriteName)
+        // Create sphere with flat grey color instead of texture
+        let texture = createGreyCircleTexture(radius: scaledRadius, tier: tier, maxTier: GameScene.tierData.count)
+        let sphere = SKSpriteNode(texture: texture)
         sphere.size = CGSize(width: scaledRadius * 2, height: scaledRadius * 2)
         sphere.name = "sphere"
         sphere.userData = [
@@ -2927,38 +2982,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         return sphere
     }
     
-    private func createMergeAnimation(radius: CGFloat) -> SKSpriteNode {
-        // 1. Load Animation Frames
-        var frames: [SKTexture] = []
-        let atlas = SKTextureAtlas(named: "MergeEffect")
-        let numImages = atlas.textureNames.count
-        for i in 0..<numImages {
-            let textureName = String(format: "frame_%02d", i)
-            frames.append(atlas.textureNamed(textureName))
-        }
-
-        // 2. Create the Animation Action
-        let timePerFrame = 0.02 // ~50 FPS, even faster
-        let animationAction = SKAction.animate(with: frames, timePerFrame: timePerFrame, resize: false, restore: true)
-
-        // 3. Create the Sprite Node
-        let firstFrameTexture = frames[0]
-        let animationNode = SKSpriteNode(texture: firstFrameTexture)
-        animationNode.zPosition = 1 // Render on top of the ball
-        
-        // Scale the animation to match the merged ball size
-        let animationSize = radius * 1.5 // Even smaller for a very tight effect
-        animationNode.size = CGSize(width: animationSize, height: animationSize)
-        
-        // 4. Run Animation and Cleanup
-        let sequence = SKAction.sequence([
-            animationAction,
-            SKAction.removeFromParent()
-        ])
-        animationNode.run(sequence)
-
-        return animationNode
-    }
 
     func createAndPlaceSphere(at position: CGPoint, tier: Int, activePowerUps: [String] = []) -> SKSpriteNode? {
         guard let sphere = createSphereNode(tier: tier) else { return nil }
@@ -3246,32 +3269,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // Find a merge partner from the remaining set
             guard let tierA = nodeA.userData?["tier"] as? Int else { continue }
             
+            // Ensure nodeA is still in the scene before proceeding
+            guard nodeA.parent != nil else { continue }
+            
             if let nodeB = toMerge.first(where: { ($0.userData?["tier"] as? Int) == tierA }) {
                 toMerge.remove(nodeB) // Partner found and removed from set
                 
+                // Ensure nodeB is still in the scene
+                guard nodeB.parent != nil else { continue }
+                
                 let nextTier = tierA + 1
-                let middlePoint = CGPoint(x: (nodeA.position.x + nodeB.position.x) / 2,
-                                          y: (nodeA.position.y + nodeB.position.y) / 2)
                 
-                // Create merge effect
-                // Calculate exact center point and size for effect
-                let mergeRadius = max(nodeA.size.width, nodeB.size.width)
-                let effectCenter = CGPoint(
-                    x: middlePoint.x,
-                    y: middlePoint.y + (mergeRadius * 0.1) // Slight upward adjustment for visual balance
-                )
+                // Run Metaball Merge Animation
+                // This handles creating the new sphere, animating the merge, and removing the temporary effects
+                runMetaballMerge(nodeA: nodeA, nodeB: nodeB, nextTier: nextTier)
                 
+                // Remove original nodes immediately so they don't interfere physically or visually
                 nodeA.removeFromParent()
                 nodeB.removeFromParent()
                 
-                if let newSphere = createAndPlaceSphere(at: middlePoint, tier: nextTier) {
-                    // Create and attach merge effect to the new sphere
-                    let mergeAnimation = createMergeAnimation(radius: mergeRadius)
-                    newSphere.addChild(mergeAnimation)
-
-                    // Make merged spheres immediately "live" for the danger zone
-                    newSphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
-                }
                 viewModel?.earnScore(points: 1)
                 
                 #if os(iOS)
