@@ -38,6 +38,7 @@ extension GameScene {
         let filter = MetaballFilter()
         filter.blurRadius = 10.0
         filter.threshold = 0.5
+        filter.opacity = 0.5
         effectNode.filter = filter
         
         effectNode.position = middlePoint

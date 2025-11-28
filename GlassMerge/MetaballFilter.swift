@@ -4,6 +4,7 @@ class MetaballFilter: CIFilter {
     @objc dynamic var inputImage: CIImage?
     @objc dynamic var threshold: CGFloat = 0.5
     @objc dynamic var blurRadius: CGFloat = 10.0
+    @objc dynamic var opacity: CGFloat = 0.5 // Default opacity for glass effect
     
     // Use string-based initialization to ensure compatibility
     private let blurFilter = CIFilter(name: "CIGaussianBlur")!
@@ -13,31 +14,22 @@ class MetaballFilter: CIFilter {
     // which is outside the scope of this code-only modification.
     // This deprecated initializer still functions correctly on current iOS versions.
     private static let thresholdKernel = CIColorKernel(source: """
-        kernel vec4 thresholdFilter(__sample image, float threshold) {
+        kernel vec4 thresholdFilter(__sample image, float threshold, float targetOpacity) {
             // Use the alpha channel to determine the shape
             float alpha = image.a;
             
-            // If alpha is above threshold, output the pixel with full opacity (1.0).
-            // To prevent the "feathered" edge where the blur fades out, we check strictly against the threshold.
-            // We also need to unpremultiply the RGB values if the blur premultiplied them, 
-            // but typically for a solid look, taking the RGB as-is (or normalized) works best if we force alpha to 1.0.
-            
             if (alpha > threshold) {
-                // Option 1: Return the original color, but force alpha to 1.0.
-                // This might look weird if the blur mixed the color with transparent black (premultiplied).
-                // A better approach for "flat" metaballs is often to just output a solid color, 
-                // but we want to preserve the ball's color/texture.
-                
-                // Since the edge is where alpha ~ threshold, the RGB there might be faded.
-                // We can boost the RGB to compensate for the fade if we assume premultiplication.
-                // vec3 color = image.rgb / alpha; // Un-premultiply
-                // return vec4(color, 1.0);
-                
                 // Let's try un-premultiplying to get the "true" color back at the edges.
                 // Protect against divide by zero.
                 float safeAlpha = max(alpha, 0.0001);
                 vec3 color = image.rgb / safeAlpha;
-                return vec4(color, 1.0);
+                
+                // Return the color with the requested opacity
+                // We need to multiply the color by the opacity if we are outputting premultiplied alpha,
+                // but usually CIColorKernel outputs are expected to be premultiplied.
+                // Core Image typically works with premultiplied alpha.
+                
+                return vec4(color * targetOpacity, targetOpacity);
             } else {
                 // Transparent
                 return vec4(0.0, 0.0, 0.0, 0.0);
@@ -55,10 +47,10 @@ class MetaballFilter: CIFilter {
         guard let blurredImage = blurFilter.outputImage else { return nil }
         
         // 2. Apply Threshold Kernel
-        // We need to pass the blurred image and the threshold value
+        // We need to pass the blurred image, the threshold value, and the target opacity
         return MetaballFilter.thresholdKernel.apply(
             extent: blurredImage.extent,
-            arguments: [blurredImage, Float(threshold)]
+            arguments: [blurredImage, Float(threshold), Float(opacity)]
         )
     }
 }
