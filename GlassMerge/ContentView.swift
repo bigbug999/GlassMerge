@@ -88,14 +88,8 @@ struct PowerUpStats {
         // Single-use power-ups (no duration)
         case "Super Massive Ball":
             return PowerUpStats(duration: nil, forceMagnitude: 0.75, massMultiplier: 2.0)  // Level 1 base stats (50% of previous)
-        case "Magnetic Ball":
-            return PowerUpStats(duration: nil, forceMagnitude: 0.5)
-        case "Negative Ball":
-            return PowerUpStats(duration: nil, forceMagnitude: 1.0)
         case "Selective Deletion":
             return PowerUpStats(duration: nil, forceMagnitude: 1.0)
-        case "Repulsion Field":
-            return PowerUpStats(duration: nil, forceMagnitude: 0.5)
             
         // Environmental power-ups (all need duration)
         case "Low Gravity":
@@ -181,21 +175,14 @@ struct PowerUp: Identifiable {
     var remainingDuration: TimeInterval = 0 // Only for environmental power-ups
     var hasBeenOffered: Bool = false
     var slotsOccupied: Int {
-        return min(level, PowerUp.maxLevel)  // Cap slots at maxLevel
+        return 1 // Always occupy 1 slot regardless of level
     }
     
     // Charge system
     var currentCharges: Int = 1  // Start with 1 charge
     var isRecharging: Bool = false
-    var mergesUntilRecharge: Int = 0  // Track merges needed for recharge
-    var requiredMergesForRecharge: Int {
-        switch level {
-            case 1: return 50
-            case 2: return 40
-            case 3: return 20
-            default: return 50
-        }
-    }
+    var rechargeTimeRemaining: TimeInterval = 0
+    var rechargeDuration: TimeInterval = 15.0
     
     var canBeUsed: Bool {
         return currentCharges > 0 && !isRecharging
@@ -216,9 +203,7 @@ struct PowerUp: Identifiable {
     mutating func useCharge() -> Bool {
         if currentCharges > 0 {
             currentCharges -= 1
-            isRecharging = false // Stop recharging if we use a charge
-            mergesUntilRecharge = 0
-
+            
             if currentCharges == 0 {
                 startRecharge()
             }
@@ -229,13 +214,13 @@ struct PowerUp: Identifiable {
     
     mutating func startRecharge() {
         isRecharging = true
-        mergesUntilRecharge = requiredMergesForRecharge
+        rechargeTimeRemaining = rechargeDuration
     }
     
-    mutating func handleMerge() {
+    mutating func updateRecharge(deltaTime: TimeInterval) {
         if isRecharging {
-            mergesUntilRecharge -= 1
-            if mergesUntilRecharge <= 0 {
+            rechargeTimeRemaining -= deltaTime
+            if rechargeTimeRemaining <= 0 {
                 completeRecharge()
             }
         }
@@ -244,7 +229,7 @@ struct PowerUp: Identifiable {
     mutating func completeRecharge() {
         currentCharges = 1
         isRecharging = false
-        mergesUntilRecharge = 0
+        rechargeTimeRemaining = 0
     }
 }
 
@@ -257,26 +242,6 @@ class PowerUpManager: ObservableObject {
             category: .gravity,
             type: .singleUse,
             icon: "circle.circle.fill",
-            isUnlocked: false,
-            level: 1,
-            cost: 25
-        ),
-        PowerUp(
-            name: "Magnetic Ball",
-            description: "Creates attraction force to same-tier balls",
-            category: .magnetism,
-            type: .singleUse,
-            icon: "bolt.circle.fill",
-            isUnlocked: false,
-            level: 1,
-            cost: 25
-        ),
-        PowerUp(
-            name: "Negative Ball",
-            description: "Single-use deletion tool, removes itself and first ball touched",
-            category: .void,
-            type: .singleUse,
-            icon: "xmark.circle.fill",
             isUnlocked: false,
             level: 1,
             cost: 25
@@ -331,16 +296,6 @@ class PowerUpManager: ObservableObject {
             category: .void,
             type: .targeting,
             icon: "trash.circle.fill",
-            isUnlocked: false,
-            level: 1,
-            cost: 25
-        ),
-        PowerUp(
-            name: "Repulsion Field",
-            description: "Creates a repulsion zone around selected ball",
-            category: .magnetism,
-            type: .targeting,
-            icon: "rays",
             isUnlocked: false,
             level: 1,
             cost: 25
@@ -458,19 +413,12 @@ class PowerUpManager: ObservableObject {
 }
 
 class GameViewModel: ObservableObject {
-    @Published var equippedPowerUps: [PowerUp?] = Array(repeating: nil, count: 6)
-    @Published var isLevelUpViewPresented = false
-    @Published var powerUpChoices: [PowerUpChoice] = []
-    @Published var hasReroll: Bool = true
+    @Published var equippedPowerUps: [PowerUp] = []
     @Published var score: Int = 0
     @Published var highScore: Int = 0
-    @Published var xp: Int = 0
-    @Published var level: Int = 1
     @Published var isGamePaused: Bool = false
     @Published var selectedFlaskSize: FlaskSize = .small
-    var xpNeededForNextLevel: Int {
-        return level * 25
-    }
+
     let powerUpManager: PowerUpManager
     private var run: Run?
     var sphereStateProvider: (() -> [Sphere])?
@@ -489,37 +437,13 @@ class GameViewModel: ObservableObject {
     }
     #endif
     
-    // Define a type to represent either a new power-up or an upgrade
-    enum PowerUpChoice: Identifiable {
-        case new(PowerUp)
-        case upgrade(PowerUp)
-        
-        var id: UUID {
-            switch self {
-            case .new(let powerUp), .upgrade(let powerUp):
-                return powerUp.id
-            }
-        }
-        
-        var powerUp: PowerUp {
-            switch self {
-            case .new(let powerUp), .upgrade(let powerUp):
-                return powerUp
-            }
-        }
-        
-        var isUpgrade: Bool {
-            switch self {
-            case .new: return false
-            case .upgrade: return true
-            }
-        }
-    }
-    
     init(powerUpManager: PowerUpManager, gameData: GameData) {
         self.powerUpManager = powerUpManager
         self.run = gameData.currentRun
         self.highScore = Int(gameData.highScore)
+        
+        // Initialize with all unlocked power-ups
+        self.equippedPowerUps = powerUpManager.powerUps.filter { $0.isUnlocked }
         
         if let run = self.run {
             self.applyRunState(run)
@@ -543,16 +467,20 @@ class GameViewModel: ObservableObject {
         guard !isGamePaused else { return }
         
         let deltaTime: TimeInterval = 0.1
-        var needsUpdate = false
         
         for i in equippedPowerUps.indices {
-            guard var powerUp = equippedPowerUps[i] else { continue }
+            var powerUp = equippedPowerUps[i]
+            
+            // Update cooldown timer
+            if powerUp.isRecharging {
+                powerUp.updateRecharge(deltaTime: deltaTime)
+                equippedPowerUps[i] = powerUp
+            }
             
             // Update duration for active environmental power-ups
             if powerUp.type == .environment && powerUp.isActive {
                 if powerUp.remainingDuration > 0 {
                     powerUp.remainingDuration = max(0, powerUp.remainingDuration - deltaTime)
-                    needsUpdate = true
                     
                     // Deactivate if duration is up
                     if powerUp.remainingDuration == 0 {
@@ -562,16 +490,7 @@ class GameViewModel: ObservableObject {
                         print("\(powerUp.name) deactivated due to duration end!")
                         #endif
                     }
-                }
-            }
-            
-            if needsUpdate {
-                // Update all slots for this power up
-                let idToUpdate = powerUp.id
-                for j in equippedPowerUps.indices {
-                    if equippedPowerUps[j]?.id == idToUpdate {
-                        equippedPowerUps[j] = powerUp
-                    }
+                    equippedPowerUps[i] = powerUp
                 }
             }
         }
@@ -580,48 +499,40 @@ class GameViewModel: ObservableObject {
     private func applyRunState(_ run: Run) {
         // Restore run state
         self.score = Int(run.score)
-        self.xp = Int(run.xp)
-        self.level = Int(run.level)
         self.selectedFlaskSize = FlaskSize(rawValue: run.selectedFlaskSize ?? "small") ?? .small
         
         // Restore equipped power-ups
-        equippedPowerUps = Array(repeating: nil, count: 6)
         if let equipped = run.equippedPowerUps as? Set<EquippedPowerUp> {
             for savedPowerUp in equipped {
-                guard let basePowerUp = powerUpManager.powerUps.first(where: { $0.name == savedPowerUp.id }) else { continue }
-                var instance = basePowerUp
-                instance.level = Int(savedPowerUp.level)
-                instance.slotIndex = Int(savedPowerUp.slotIndex)
-                instance.isActive = savedPowerUp.isActive
-                instance.isPrimed = savedPowerUp.isPrimed
-                instance.remainingDuration = savedPowerUp.remainingDuration
-                instance.currentCharges = Int(savedPowerUp.currentCharges)
-                instance.isRecharging = savedPowerUp.isRecharging
-                instance.mergesUntilRecharge = Int(savedPowerUp.mergesUntilRecharge)
-                
-                let slotIndex = Int(savedPowerUp.slotIndex)
-                if slotIndex >= 0 && slotIndex < equippedPowerUps.count {
-                    for i in 0..<instance.slotsOccupied {
-                        let currentSlot = slotIndex + i
-                        if currentSlot < equippedPowerUps.count {
-                            equippedPowerUps[currentSlot] = instance
-                        }
+                if let index = equippedPowerUps.firstIndex(where: { $0.name == savedPowerUp.id }) {
+                    var instance = equippedPowerUps[index]
+                    instance.isActive = savedPowerUp.isActive
+                    instance.isPrimed = savedPowerUp.isPrimed
+                    instance.remainingDuration = savedPowerUp.remainingDuration
+                    instance.currentCharges = Int(savedPowerUp.currentCharges)
+                    instance.isRecharging = savedPowerUp.isRecharging
+                    // Merges until recharge is deprecated, but we can initialize rechargeTimeRemaining if needed
+                    // For now, if it was recharging, just restart the timer to full duration or 0 if unknown
+                    if instance.isRecharging {
+                        instance.rechargeTimeRemaining = instance.rechargeDuration
                     }
-                }
-
-                // If this is an active environmental power-up, make sure the timer is running
-                if instance.type == .environment && instance.isActive && instance.remainingDuration > 0 {
+                    
+                    equippedPowerUps[index] = instance
+                    
+                    // If this is an active environmental power-up, make sure the timer is running
+                    if instance.type == .environment && instance.isActive && instance.remainingDuration > 0 {
+                        #if DEBUG
+                        print("Restored active environmental power-up: \(instance.name) with \(instance.remainingDuration)s remaining")
+                        #endif
+                    }
+                    
+                    // Log recharge state if recharging
                     #if DEBUG
-                    print("Restored active environmental power-up: \(instance.name) with \(instance.remainingDuration)s remaining")
+                    if instance.isRecharging {
+                        print("Restored recharging power-up: \(instance.name)")
+                    }
                     #endif
                 }
-                
-                // Log recharge state if recharging
-                #if DEBUG
-                if instance.isRecharging {
-                    print("Restored recharging power-up: \(instance.name) with \(instance.mergesUntilRecharge) merges remaining")
-                }
-                #endif
             }
         }
 
@@ -630,236 +541,11 @@ class GameViewModel: ObservableObject {
         #endif
     }
     
-    private func hasEnoughSlotsForUpgrade(_ powerUp: PowerUp) -> Bool {
-        let neededSlots = powerUp.level + 1 // Next level needs this many slots
-        
-        #if DEBUG
-        print("\nChecking upgrade possibility for \(powerUp.name):")
-        print("Current level: \(powerUp.level)")
-        print("Slots needed: \(neededSlots)")
-        #endif
-        
-        // First try to find slots around the current position
-        if let currentIndex = powerUp.slotIndex ?? equippedPowerUps.firstIndex(where: { $0?.id == powerUp.id }) {
-            // Check slots before current position
-            var beforeSlots = 0
-            for i in (0..<currentIndex).reversed() {
-                if equippedPowerUps[i] == nil {
-                    beforeSlots += 1
-                } else {
-                    break
-                }
-            }
-            
-            // Check current position and slots after
-            var afterSlots = 1  // Count current position
-            for i in (currentIndex + 1)..<equippedPowerUps.count {
-                if equippedPowerUps[i] == nil || equippedPowerUps[i]?.id == powerUp.id {
-                    afterSlots += 1
-                } else {
-                    break
-                }
-            }
-            
-            let totalAdjacentSlots = beforeSlots + afterSlots
-            
-            #if DEBUG
-            print("Adjacent slots check:")
-            print("- Before current position: \(beforeSlots)")
-            print("- After current position: \(afterSlots)")
-            print("- Total adjacent: \(totalAdjacentSlots)")
-            #endif
-            
-            if totalAdjacentSlots >= neededSlots {
-                #if DEBUG
-                print("✅ Found enough adjacent slots!")
-                #endif
-                return true
-            }
-        }
-        
-        // If we can't find enough adjacent slots, look for any consecutive empty slots
-        var consecutiveEmptySlots = 0
-        var maxConsecutiveEmpty = 0
-        
-        for (_, slot) in equippedPowerUps.enumerated() {
-            if slot == nil {
-                consecutiveEmptySlots += 1
-                maxConsecutiveEmpty = max(maxConsecutiveEmpty, consecutiveEmptySlots)
-            } else if slot?.id != powerUp.id {
-                consecutiveEmptySlots = 0
-            }
-        }
-        
-        #if DEBUG
-        print("Consecutive empty slots check:")
-        print("- Maximum consecutive empty slots: \(maxConsecutiveEmpty)")
-        print("- Needed slots: \(neededSlots)")
-        print(maxConsecutiveEmpty >= neededSlots ? "✅ Found enough consecutive empty slots!" : "❌ Not enough consecutive slots available")
-        #endif
-        
-        return maxConsecutiveEmpty >= neededSlots
-    }
-    
-    func presentLevelUpChoices() {
-        let excludedPowerUps: Set<String> = ["Magnetic Ball", "Repulsion Field", "Negative Ball"]
-        let hasEmptySlot = equippedPowerUps.contains(where: { $0 == nil })
-        
-        #if DEBUG
-        print("\n=== Level Up Choices Debug ===")
-        print("Current equipped power-ups:")
-        for (index, powerUp) in equippedPowerUps.enumerated() {
-            if let powerUp = powerUp {
-                print("Slot \(index): \(powerUp.name) (Level \(powerUp.level))")
-            } else {
-                print("Slot \(index): Empty")
-            }
-        }
-        #endif
-        
-        // Get ALL equipped power-ups that aren't max level and have enough slots for upgrade
-        let upgradeablePowerUps = equippedPowerUps.compactMap { powerUp -> PowerUp? in
-            guard let powerUp = powerUp,
-                  powerUp.level < PowerUp.maxLevel,
-                  !excludedPowerUps.contains(powerUp.name) else { return nil }
-            
-            let hasSlots = hasEnoughSlotsForUpgrade(powerUp)
-            
-            #if DEBUG
-            print("\nPower-up upgrade check: \(powerUp.name)")
-            print("- Current level: \(powerUp.level)")
-            print("- Max level: \(PowerUp.maxLevel)")
-            print("- Has enough slots: \(hasSlots)")
-            #endif
-            
-            return hasSlots ? powerUp : nil
-        }
-        
-        // Don't show level up screen if no slots available and no upgrades possible
-        guard hasEmptySlot || !upgradeablePowerUps.isEmpty else {
-            #if DEBUG
-            print("\nNo level up screen shown:")
-            print("- Has empty slot: \(hasEmptySlot)")
-            print("- Upgradeable power-ups count: \(upgradeablePowerUps.count)")
-            #endif
-            return
-        }
-        
-        var choices: [PowerUpChoice] = []
-        var seenPowerUpNames = Set<String>()
-        
-        // Get available new power-ups if there are empty slots
-        if hasEmptySlot {
-            let availablePowerUps = powerUpManager.getAvailablePowerUps()
-                .filter { powerUp in
-                    powerUp.isUnlocked &&
-                    !seenPowerUpNames.contains(powerUp.name) &&
-                    !equippedPowerUps.contains(where: { $0?.name == powerUp.name }) &&
-                    !excludedPowerUps.contains(powerUp.name)
-                }
-            
-            let newPowerUps = availablePowerUps.shuffled()
-            
-            // Add up to 3 new power-ups
-            for powerUp in newPowerUps.prefix(3) {
-                choices.append(PowerUpChoice.new(powerUp))
-                seenPowerUpNames.insert(powerUp.name)
-                
-                #if DEBUG
-                print("\nAdded new power-up choice:")
-                print("- Power-up: \(powerUp.name)")
-                #endif
-            }
-        }
-        
-        // If we have less than 3 choices and upgrades are available,
-        // fill remaining slots with upgrades
-        if choices.count < 3 && !upgradeablePowerUps.isEmpty {
-            let shuffledUpgrades = upgradeablePowerUps.shuffled()
-            let slotsToFill = 3 - choices.count
-            let upgradesForMainSlots = shuffledUpgrades.prefix(slotsToFill)
-            
-            for powerUp in upgradesForMainSlots {
-                choices.append(PowerUpChoice.upgrade(powerUp))
-                seenPowerUpNames.insert(powerUp.name)
-                
-                #if DEBUG
-                print("\nAdded upgrade choice to main slots:")
-                print("- Power-up: \(powerUp.name)")
-                print("- Current Level: \(powerUp.level)")
-                print("- Next Level: \(powerUp.level + 1)")
-                #endif
-            }
-        }
-        
-        // Ensure we have exactly 3 main choices
-        choices = Array(choices.prefix(3))
-        
-        // If we have upgradeable power-ups that weren't used in the main slots,
-        // add one as a fourth choice
-        if !upgradeablePowerUps.isEmpty {
-            let remainingUpgrades = upgradeablePowerUps.filter { powerUp in
-                !seenPowerUpNames.contains(powerUp.name)
-            }
-            
-            if let extraUpgrade = remainingUpgrades.randomElement() {
-                choices.append(PowerUpChoice.upgrade(extraUpgrade))
-                
-                #if DEBUG
-                print("\nAdded extra upgrade choice in fourth slot:")
-                print("- Power-up: \(extraUpgrade.name)")
-                print("- Current Level: \(extraUpgrade.level)")
-                print("- Next Level: \(extraUpgrade.level + 1)")
-                #endif
-            }
-        }
-        
-        // Shuffle only the first 3 choices, keeping any fourth upgrade choice in place
-        let mainChoices = Array(choices.prefix(3)).shuffled()
-        let extraChoice = choices.count > 3 ? [choices[3]] : []
-        powerUpChoices = mainChoices + extraChoice
-        
-        #if DEBUG
-        print("\nFinal choices (\(powerUpChoices.count)):")
-        for (index, choice) in powerUpChoices.enumerated() {
-            switch choice {
-            case .new(let powerUp):
-                print("\(index + 1). New: \(powerUp.name)")
-            case .upgrade(let powerUp):
-                print("\(index + 1). Upgrade: \(powerUp.name) (Level \(powerUp.level) → \(powerUp.level + 1))")
-            }
-        }
-        print("=== End Debug ===\n")
-        #endif
-        
-        isLevelUpViewPresented = true
-        saveGameState()
-    }
-    
-    func rerollChoices() {
-        presentLevelUpChoices()
-    }
-    
-    func skipLevelUp() {
-        isLevelUpViewPresented = false
-    }
-    
-    func selectPowerUp(_ choice: PowerUpChoice) {
-        switch choice {
-        case .new(let powerUp):
-            powerUpManager.markAsOffered(powerUp)
-            addNewPowerUp(powerUp)
-        case .upgrade(let powerUp):
-            upgradePowerUp(powerUp)
-        }
-        isLevelUpViewPresented = false
-        saveGameState() // Save after applying choice
-    }
     
     func activatePowerUp(_ powerUpToActivate: PowerUp) {
         // Find the power-up in equipped slots
-        guard let index = equippedPowerUps.firstIndex(where: { $0?.id == powerUpToActivate.id }),
-              var powerUp = equippedPowerUps[index] else { return }
+        guard let index = equippedPowerUps.firstIndex(where: { $0.id == powerUpToActivate.id }) else { return }
+        var powerUp = equippedPowerUps[index]
         
         #if DEBUG
         print("Activating power-up: \(powerUp.name), type: \(powerUp.type), current state - isPrimed: \(powerUp.isPrimed), isActive: \(powerUp.isActive)")
@@ -886,22 +572,13 @@ class GameViewModel: ObservableObject {
 
                 // Deprime any other targeting power-ups
                 for i in equippedPowerUps.indices {
-                    if var otherPowerUp = equippedPowerUps[i],
-                       otherPowerUp.id != powerUp.id,
-                       otherPowerUp.type == .targeting,
-                       otherPowerUp.isPrimed {
-                        otherPowerUp.isPrimed = false
+                    if equippedPowerUps[i].id != powerUp.id &&
+                       equippedPowerUps[i].type == .targeting &&
+                       equippedPowerUps[i].isPrimed {
+                        equippedPowerUps[i].isPrimed = false
                         #if DEBUG
-                        print("\(otherPowerUp.name) deprimed due to new targeting activation!")
+                        print("\(equippedPowerUps[i].name) deprimed due to new targeting activation!")
                         #endif
-                        
-                        // Update all slots for this other power-up
-                        let idToUpdate = otherPowerUp.id
-                        for j in equippedPowerUps.indices {
-                            if equippedPowerUps[j]?.id == idToUpdate {
-                                equippedPowerUps[j] = otherPowerUp
-                            }
-                        }
                     }
                 }
                 
@@ -928,23 +605,14 @@ class GameViewModel: ObservableObject {
 
             // Deactivate any other active environmental power-ups
             for i in equippedPowerUps.indices {
-                if var otherPowerUp = equippedPowerUps[i],
-                   otherPowerUp.id != powerUp.id,
-                   otherPowerUp.type == .environment,
-                   otherPowerUp.isActive {
-                    otherPowerUp.isActive = false
-                    otherPowerUp.isPrimed = false // also reset primed state just in case
-                    
-                    // Update all slots for this other power-up
-                    let idToUpdate = otherPowerUp.id
-                    for j in equippedPowerUps.indices {
-                        if equippedPowerUps[j]?.id == idToUpdate {
-                            equippedPowerUps[j] = otherPowerUp
-                        }
-                    }
+                if equippedPowerUps[i].id != powerUp.id &&
+                   equippedPowerUps[i].type == .environment &&
+                   equippedPowerUps[i].isActive {
+                    equippedPowerUps[i].isActive = false
+                    equippedPowerUps[i].isPrimed = false // also reset primed state just in case
                     
                     #if DEBUG
-                    print("\(otherPowerUp.name) deactivated due to new environmental activation!")
+                    print("\(equippedPowerUps[i].name) deactivated due to new environmental activation!")
                     #endif
                 }
             }
@@ -971,22 +639,13 @@ class GameViewModel: ObservableObject {
             
             // Deactivate any other active single-use power-ups
             for i in equippedPowerUps.indices {
-                if var otherPowerUp = equippedPowerUps[i],
-                   otherPowerUp.id != powerUp.id,
-                   otherPowerUp.type == .singleUse,
-                   otherPowerUp.isActive {
-                    otherPowerUp.isActive = false
+                if equippedPowerUps[i].id != powerUp.id &&
+                   equippedPowerUps[i].type == .singleUse &&
+                   equippedPowerUps[i].isActive {
+                    equippedPowerUps[i].isActive = false
                     #if DEBUG
-                    print("\(otherPowerUp.name) deactivated due to new activation!")
+                    print("\(equippedPowerUps[i].name) deactivated due to new activation!")
                     #endif
-                    
-                    // Update all slots for this power up
-                    let idToUpdate = otherPowerUp.id
-                    for j in equippedPowerUps.indices {
-                        if equippedPowerUps[j]?.id == idToUpdate {
-                            equippedPowerUps[j] = otherPowerUp
-                        }
-                    }
                 }
             }
             
@@ -997,31 +656,20 @@ class GameViewModel: ObservableObject {
             #endif
         }
         
-        // Update all slots for this power up
-        let idToUpdate = powerUp.id
-        for i in equippedPowerUps.indices {
-            if equippedPowerUps[i]?.id == idToUpdate {
-                equippedPowerUps[i] = powerUp
-            }
-        }
+        // Update the slot
+        equippedPowerUps[index] = powerUp
     }
     
     // Call this when a single-use power-up's effect is actually applied
     func consumeSingleUsePowerUp(_ powerUpName: String) {
         for i in equippedPowerUps.indices {
-            if var powerUp = equippedPowerUps[i],
-               powerUp.name == powerUpName,
+            var powerUp = equippedPowerUps[i]
+            if powerUp.name == powerUpName,
                powerUp.type == .singleUse,
                powerUp.isActive {
                 if powerUp.useCharge() {
                     powerUp.isActive = false
-                    // Update all slots for this power-up
-                    let idToUpdate = powerUp.id
-                    for j in equippedPowerUps.indices {
-                        if equippedPowerUps[j]?.id == idToUpdate {
-                            equippedPowerUps[j] = powerUp
-                        }
-                    }
+                    equippedPowerUps[i] = powerUp
                     #if DEBUG
                     print("\(powerUp.name) used and deactivated!")
                     #endif
@@ -1033,8 +681,8 @@ class GameViewModel: ObservableObject {
     private func deactivateSingleUsePowerUp(_ powerUp: PowerUp) {
         // Find and deactivate the power-up
         for i in equippedPowerUps.indices {
-            if var slotPowerUp = equippedPowerUps[i],
-               slotPowerUp.id == powerUp.id {
+            var slotPowerUp = equippedPowerUps[i]
+            if slotPowerUp.id == powerUp.id {
                 slotPowerUp.isActive = false
                 equippedPowerUps[i] = slotPowerUp
                 
@@ -1045,144 +693,6 @@ class GameViewModel: ObservableObject {
         }
     }
     
-    private func addNewPowerUp(_ powerUp: PowerUp) {
-        var newPowerUp = powerUp
-        newPowerUp.hasBeenOffered = true
-        
-        // Find first empty slot
-        if let startIndex = findFirstEmptySlot() {
-            newPowerUp.slotIndex = startIndex
-            equippedPowerUps[startIndex] = newPowerUp
-            
-            // Mark the power-up as offered in the manager
-            if let index = powerUpManager.powerUps.firstIndex(where: { $0.id == powerUp.id }) {
-                powerUpManager.powerUps[index].hasBeenOffered = true
-            }
-        }
-    }
-    
-    private func upgradePowerUp(_ powerUp: PowerUp) {
-        // Find all instances of this power-up
-        let instances = equippedPowerUps.enumerated()
-            .filter { $0.element?.id == powerUp.id }
-            .map { $0.offset }
-        
-        guard let startIndex = instances.first else { return }
-        
-        // Create upgraded version, preserving active state
-        var upgradedPowerUp = powerUp
-        upgradedPowerUp.level += 1
-        upgradedPowerUp.slotIndex = startIndex
-        upgradedPowerUp.isActive = powerUp.isActive // Preserve active state during upgrade
-        
-        // Calculate how many slots we need
-        let slotsNeeded = upgradedPowerUp.slotsOccupied
-        
-        // Find the best position for the upgraded power-up
-        var availableSlots: [Int] = []
-        var consecutiveSlots = 0
-        var bestStartIndex = -1 // Use -1 to indicate no suitable position found yet
-        var maxConsecutiveSlots = 0
-
-        for i in 0..<equippedPowerUps.count {
-            if equippedPowerUps[i] == nil || equippedPowerUps[i]?.id == powerUp.id {
-                consecutiveSlots += 1
-                availableSlots.append(i)
-            } else {
-                consecutiveSlots = 0
-                availableSlots.removeAll()
-            }
-
-            if consecutiveSlots > maxConsecutiveSlots {
-                maxConsecutiveSlots = consecutiveSlots
-                // The start index of this consecutive block
-                bestStartIndex = i - consecutiveSlots + 1
-            }
-        }
-        
-        // We only need a block that is large enough
-        if maxConsecutiveSlots < slotsNeeded {
-            #if DEBUG
-            print("❌ Not enough consecutive slots available for upgrade!")
-            #endif
-            return
-        }
-        
-        // Now we have a valid starting position, update the powerUp
-        upgradedPowerUp.slotIndex = bestStartIndex
-        upgradedPowerUp.isActive = powerUp.isActive // Preserve active state during upgrade
-        
-        // Clear only the slots that were occupied by this power-up
-        for index in instances {
-            // This seems complex, let's simplify. Let's just clear ALL old instances.
-            clearSlotsForPowerUp(startingAt: index)
-        }
-        for i in equippedPowerUps.indices {
-            if equippedPowerUps[i]?.id == powerUp.id {
-                equippedPowerUps[i] = nil
-            }
-        }
-
-        // Place upgraded version in consecutive slots starting at the best position
-        for i in 0..<slotsNeeded {
-            let slotIndex = bestStartIndex + i
-            if slotIndex < equippedPowerUps.count {
-                equippedPowerUps[slotIndex] = upgradedPowerUp
-            }
-        }
-        
-        #if DEBUG
-        print("\nUpgrading power-up: \(powerUp.name)")
-        print("- From level: \(powerUp.level)")
-        print("- To level: \(upgradedPowerUp.level)")
-        print("- Slots needed: \(slotsNeeded)")
-        print("- Best start index: \(bestStartIndex)")
-        print("- Max consecutive slots: \(maxConsecutiveSlots)")
-        print("✅ Power-up upgraded successfully")
-        print("Current slot state:")
-        for (index, slot) in equippedPowerUps.enumerated() {
-            if let powerUp = slot {
-                print("Slot \(index): \(powerUp.name) (Level \(powerUp.level))")
-            } else {
-                print("Slot \(index): Empty")
-            }
-        }
-        #endif
-    }
-    
-    private func findFirstEmptySlot() -> Int? {
-        var consecutiveEmpty = 0
-        var startIndex: Int?
-        
-        for (index, slot) in equippedPowerUps.enumerated() {
-            if slot == nil {
-                if startIndex == nil {
-                    startIndex = index
-                }
-                consecutiveEmpty += 1
-                if consecutiveEmpty >= 1 { // For new power-ups, we only need 1 slot
-                    return startIndex
-                }
-            } else {
-                consecutiveEmpty = 0
-                startIndex = nil
-            }
-        }
-        return nil
-    }
-    
-    private func clearSlotsForPowerUp(startingAt index: Int) {
-        let powerUp = equippedPowerUps[index]
-        guard let powerUp = powerUp else { return }
-        
-        // Find all slots occupied by this power-up instance
-        let slotsToCheck = min(index + powerUp.slotsOccupied, equippedPowerUps.count)
-        for i in index..<slotsToCheck {
-            if equippedPowerUps[i]?.id == powerUp.id {
-                equippedPowerUps[i] = nil
-            }
-        }
-    }
     
     // MARK: - Saving
     func saveGameState() {
@@ -1190,8 +700,6 @@ class GameViewModel: ObservableObject {
 
         // Update run stats
         run.score = Int64(score)
-        run.level = Int64(level)
-        run.xp = Int64(xp)
         run.selectedFlaskSize = selectedFlaskSize.rawValue
 
         // Update high score in GameData
@@ -1220,23 +728,19 @@ class GameViewModel: ObservableObject {
         
         let context = CoreDataManager.shared.context
         var equippedToSave: [EquippedPowerUp] = []
-        var savedPowerUpIDs = Set<UUID>() // To avoid saving the same power-up multiple times
+        
         for (index, powerUp) in equippedPowerUps.enumerated() {
-            guard let powerUp = powerUp, !savedPowerUpIDs.contains(powerUp.id) else { continue }
-            
-            savedPowerUpIDs.insert(powerUp.id)
-            
             let equipped = EquippedPowerUp(context: context)
             equipped.id = powerUp.name
             equipped.level = Int64(powerUp.level)
-            equipped.slotIndex = Int64(powerUp.slotIndex ?? index)
+            equipped.slotIndex = Int64(index)
             equipped.isActive = powerUp.isActive
             equipped.isPrimed = powerUp.isPrimed
             equipped.remainingDuration = powerUp.remainingDuration
             equipped.type = powerUp.type.rawValue
             equipped.currentCharges = Int64(powerUp.currentCharges)
             equipped.isRecharging = powerUp.isRecharging
-            equipped.mergesUntilRecharge = Int64(powerUp.mergesUntilRecharge)
+            equipped.mergesUntilRecharge = Int64(powerUp.rechargeTimeRemaining)
             equippedToSave.append(equipped)
         }
         run.addToEquippedPowerUps(NSSet(array: equippedToSave))
@@ -1266,45 +770,14 @@ class GameViewModel: ObservableObject {
     
     func earnScore(points: Int = 1) {
         score += points
-        xp += points
 
         if score > highScore {
             highScore = score
         }
         
-        // Handle power-up recharging on merge
-        var handledPowerUpIDs = Set<UUID>()
-        for i in equippedPowerUps.indices {
-            guard var powerUp = equippedPowerUps[i], !handledPowerUpIDs.contains(powerUp.id) else { continue }
-            
-            handledPowerUpIDs.insert(powerUp.id)
-            powerUp.handleMerge()
-
-            // Update all slots for this power up since it's a struct
-            for j in equippedPowerUps.indices {
-                if equippedPowerUps[j]?.id == powerUp.id {
-                    equippedPowerUps[j] = powerUp
-                }
-            }
-
-            #if DEBUG
-            if powerUp.isRecharging {
-                print("Power-up \(powerUp.name) recharging: \(powerUp.mergesUntilRecharge) merges remaining")
-            }
-            #endif
-        }
-        
         #if DEBUG
-        print("EarnScore: score=\(score) xp=\(xp)/\(xpNeededForNextLevel) level=\(level)")
+        print("EarnScore: score=\(score)")
         #endif
-        if xp >= xpNeededForNextLevel {
-            xp -= xpNeededForNextLevel
-            level += 1
-            #if DEBUG
-            print("LEVEL UP! new level=\(level) xp reset to \(xp)")
-            #endif
-            presentLevelUpChoices()
-        }
     }
     
     func getSphereStates() -> [Sphere]? {
@@ -1329,12 +802,8 @@ class GameViewModel: ObservableObject {
     
     func reset() {
         score = 0
-        xp = 0
-        level = 1
-        equippedPowerUps = Array(repeating: nil, count: 6)
-        powerUpChoices = []
-        hasReroll = true
-        isLevelUpViewPresented = false
+        equippedPowerUps = powerUpManager.powerUps.filter { $0.isUnlocked }
+        
         if let run = self.run {
              CoreDataManager.shared.context.delete(run)
              CoreDataManager.shared.saveContext()
@@ -1345,10 +814,6 @@ class GameViewModel: ObservableObject {
     }
 
     #if DEBUG
-    func debug_triggerLevelUp() {
-        presentLevelUpChoices()
-    }
-
     func debug_spawnBall() {
         debug_spawnBallTier = debug_spawnBallTierSelection
     }
@@ -1605,20 +1070,12 @@ struct GameView: View {
                     Text("Score: \(viewModel.score)")
                         .font(.headline)
                     Spacer()
-                    ProgressView(value: Double(viewModel.xp), total: Double(viewModel.xpNeededForNextLevel))
-                        .progressViewStyle(.linear)
-                        .frame(width: 150)
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Text("Lv\(viewModel.level)")
-                            .font(.headline)
-                        Button(action: {
-                            isPaused = true
-                        }) {
-                            Image(systemName: "pause.circle.fill")
-                                .font(.title)
-                                .foregroundColor(.blue)
-                        }
+                    Button(action: {
+                        isPaused = true
+                    }) {
+                        Image(systemName: "pause.circle.fill")
+                            .font(.title)
+                            .foregroundColor(.blue)
                     }
                 }
                 .padding()
@@ -1676,9 +1133,6 @@ struct GameView: View {
                 )
             }
         }
-        .sheet(isPresented: $viewModel.isLevelUpViewPresented) {
-            LevelUpView(viewModel: viewModel)
-        }
         .onChange(of: isPaused) { _, newValue in
             viewModel.isGamePaused = newValue
             if newValue {
@@ -1690,12 +1144,9 @@ struct GameView: View {
                 viewModel.saveGameState()
             }
         }
-        .onChange(of: viewModel.isLevelUpViewPresented) { _, _ in
-            // Physics will pause automatically due to updateUIView
-        }
         // Add auto-save timer subscription
         .onReceive(autoSaveTimer) { _ in
-            if !isPaused && !isGameOver && !viewModel.isLevelUpViewPresented {
+            if !isPaused && !isGameOver {
                 #if DEBUG
                 print("[AutoSave] Saving game state...")
                 #endif
@@ -1710,60 +1161,27 @@ struct GameView: View {
 }
 
 struct PowerUpSlotView: View {
-    @Binding var powerUps: [PowerUp?]
+    @Binding var powerUps: [PowerUp]
     let onActivate: (PowerUp) -> Void
     let slotSize: CGFloat = 50
     let spacing: CGFloat = 12
     
     var body: some View {
-        HStack(spacing: spacing) {
-            ForEach(0..<6) { index in
-                if shouldDrawSlot(at: index) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: spacing) {
+                ForEach(powerUps) { powerUp in
                     PowerUpSlot(
-                        powerUp: powerUps[index],
-                        isPartOfMultiSlot: isPartOfMultiSlot(index),
-                        isFirstSlot: isFirstSlotOfPowerUp(index),
-                        totalSlots: slotsForPowerUp(at: index)
+                        powerUp: powerUp
                     )
-                    .frame(width: calculateSlotWidth(for: index))
+                    .frame(width: slotSize)
                     .onTapGesture {
-                        if let powerUp = powerUps[index] {
-                            onActivate(powerUp)
-                        }
+                        onActivate(powerUp)
                     }
                 }
             }
+            .padding(.horizontal)
         }
-    }
-    
-    private func shouldDrawSlot(at index: Int) -> Bool {
-        // Only draw if this is the first slot of a power-up or an empty slot
-        if powerUps[index] != nil {
-            return isFirstSlotOfPowerUp(index)
-        }
-        return true // Empty slots always draw
-    }
-    
-    private func isFirstSlotOfPowerUp(_ index: Int) -> Bool {
-        guard let currentPowerUp = powerUps[index] else { return false }
-        return index == 0 || powerUps[index - 1]?.id != currentPowerUp.id
-    }
-    
-    private func isPartOfMultiSlot(_ index: Int) -> Bool {
-        guard let currentPowerUp = powerUps[index] else { return false }
-        return currentPowerUp.slotsOccupied > 1
-    }
-    
-    private func slotsForPowerUp(at index: Int) -> Int {
-        return powerUps[index]?.slotsOccupied ?? 1
-    }
-    
-    private func calculateSlotWidth(for index: Int) -> CGFloat {
-        guard let powerUp = powerUps[index], isFirstSlotOfPowerUp(index) else {
-            return slotSize
-        }
-        let slots = CGFloat(powerUp.slotsOccupied)
-        return slotSize * slots + spacing * (slots - 1)
+        .frame(height: slotSize + 10)
     }
 }
 
@@ -1812,9 +1230,8 @@ struct PowerUpSlot: View {
     
     private var rechargeProgress: CGFloat {
         guard let powerUp = powerUp,
-              powerUp.isRecharging,
-              powerUp.requiredMergesForRecharge > 0 else { return 0 }
-        let progress = 1.0 - (CGFloat(powerUp.mergesUntilRecharge) / CGFloat(powerUp.requiredMergesForRecharge))
+              powerUp.isRecharging else { return 0 }
+        let progress = 1.0 - (CGFloat(powerUp.rechargeTimeRemaining) / CGFloat(powerUp.rechargeDuration))
         return max(0.0, min(1.0, progress)) // Clamp progress between 0 and 1
     }
     
@@ -1858,9 +1275,9 @@ struct PowerUpSlot: View {
                                     .foregroundColor(.gray)
                             }
                             
-                            // Show recharge count if recharging
+                            // Show recharge timer if recharging
                             if powerUp.isRecharging {
-                                Text("\(powerUp.mergesUntilRecharge)")
+                                Text("\(Int(ceil(powerUp.rechargeTimeRemaining)))s")
                                     .font(.system(size: 10))
                                     .foregroundColor(.gray)
                             }
@@ -1913,7 +1330,7 @@ struct DebugMenuView: View {
             
             Button("Trigger Level Up") {
                 #if DEBUG
-                viewModel.presentLevelUpChoices()
+                // Level up logic has been removed, button does nothing for now
                 #endif
                 isPaused = false
             }
@@ -2259,98 +1676,6 @@ struct SettingsView: View {
     }
 }
 
-struct LevelUpView: View {
-    @ObservedObject var viewModel: GameViewModel
-    
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.7)
-                .ignoresSafeArea()
-            
-            VStack(spacing: 16) {
-                Text("Choose Power-up")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                VStack(spacing: 12) {
-                    ForEach(viewModel.powerUpChoices) { choice in
-                        PowerUpChoiceCard(choice: choice) {
-                            viewModel.selectPowerUp(choice)
-                        }
-                        .frame(maxWidth: 220) // narrower card width for vertical layout
-                    }
-                }
-                
-                HStack(spacing: 16) {
-                    Button(action: {
-                        viewModel.skipLevelUp()
-                    }) {
-                        Text("Skip")
-                            .foregroundColor(.gray)
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    if viewModel.hasReroll {
-                        Button(action: {
-                            viewModel.rerollChoices()
-                        }) {
-                            Text("Reroll")
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-                .padding(.top, 8)
-            }
-            .padding(24)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(white: 0.15))
-            )
-        }
-    }
-}
-
-struct PowerUpChoiceCard: View {
-    let choice: GameViewModel.PowerUpChoice
-    let onSelect: () -> Void
-    
-    var body: some View {
-        Button(action: onSelect) {
-            VStack(spacing: 8) {
-                Image(systemName: choice.powerUp.icon)
-                    .font(.system(size: 24))
-                    .foregroundColor(.blue)
-                
-                VStack(spacing: 2) {
-                    Text(choice.powerUp.name)
-                        .font(.subheadline)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    
-                    if choice.isUpgrade {
-                        Text("Upgrade to Lv\(choice.powerUp.level + 1)")
-                            .font(.caption2)
-                            .foregroundColor(.green)  // Make upgrade text green to stand out
-                    }
-                }
-            }
-            .frame(width: 100)
-            .padding(.vertical, 12)
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(white: choice.isUpgrade ? 0.25 : 0.2))  // Slightly different background for upgrades
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(choice.isUpgrade ? Color.green.opacity(0.3) : Color.clear, lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
 
 struct GameOverView: View {
     let score: Int
@@ -2444,7 +1769,7 @@ struct SpriteKitContainer: UIViewRepresentable {
     func updateUIView(_ view: SKView, context: Context) {
         if let scene = context.coordinator.scene {
             scene.viewModel = viewModel
-            scene.isPaused = viewModel.isGamePaused || viewModel.isLevelUpViewPresented
+            scene.isPaused = viewModel.isGamePaused
             
             // Update grid and ball sizes when flask size changes
             if scene.viewModel?.selectedFlaskSize != viewModel.selectedFlaskSize {
@@ -2488,8 +1813,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let powerUpColors: [String: SKColor] = [
         // Single-use power-ups
         "Super Massive Ball": SKColor(Color.blue),
-        "Magnetic Ball": SKColor(Color.purple),
-        "Negative Ball": SKColor(Color.red),
         
         // Environmental power-ups
         "Low Gravity": SKColor(Color.blue),
@@ -2498,14 +1821,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         "Tilt World": SKColor(Color.yellow),
         
         // Targeting power-ups
-        "Selective Deletion": SKColor(Color.red.opacity(0.7)),
-        "Repulsion Field": SKColor(Color.orange)
+        "Selective Deletion": SKColor(Color.red.opacity(0.7))
     ]
     
     // Helper for checking active power-ups
     private func hasActivePowerUp(_ name: String) -> Bool {
         return viewModel?.equippedPowerUps.contains(where: { powerUp in
-            powerUp?.name == name && powerUp?.isActive == true
+            powerUp.name == name && powerUp.isActive == true
         }) ?? false
     }
     
@@ -2569,14 +1891,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // Helper for checking primed or active environmental power-ups
     private func getActiveEnvironmentalPowerUp() -> PowerUp? {
         return viewModel?.equippedPowerUps
-            .compactMap({ $0 })
             .first(where: { $0.type == .environment && $0.isActive })
     }
     
     // Get the active power-up that should affect the current ball
     private var currentActivePowerUp: (name: String, color: SKColor)? {
         for (powerUpName, color) in powerUpColors {
-            if let powerUp = viewModel?.equippedPowerUps.compactMap({ $0 }).first(where: { $0.name == powerUpName && $0.isActive }) {
+            if let powerUp = viewModel?.equippedPowerUps.first(where: { $0.name == powerUpName && $0.isActive }) {
                 // Only return non-environmental power-ups for ball effects
                 if powerUp.type != .environment {
                     return (powerUpName, color)
@@ -2656,8 +1977,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Reset any active targeting power-ups
         if let viewModel = viewModel {
             for i in viewModel.equippedPowerUps.indices {
-                if var powerUp = viewModel.equippedPowerUps[i],
-                   powerUp.type == .targeting,
+                var powerUp = viewModel.equippedPowerUps[i]
+                if powerUp.type == .targeting &&
                    (powerUp.isPrimed || powerUp.isActive) {
                     powerUp.isPrimed = false
                     powerUp.isActive = false
@@ -3179,25 +2500,24 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             if isPaused {
                 if targetingState != .none {
                     exitTargetingMode()
-                    // Also reset any primed or active targeting power-ups
-                    for i in viewModel.equippedPowerUps.indices {
-                        if var powerUp = viewModel.equippedPowerUps[i],
-                           powerUp.type == .targeting,
-                           (powerUp.isPrimed || powerUp.isActive) {
-                            powerUp.isPrimed = false
-                            powerUp.isActive = false
-                            viewModel.equippedPowerUps[i] = powerUp
-                        }
-                    }
+            // Also reset any primed or active targeting power-ups
+            for i in viewModel.equippedPowerUps.indices {
+                var powerUp = viewModel.equippedPowerUps[i]
+                if powerUp.type == .targeting &&
+                   (powerUp.isPrimed || powerUp.isActive) {
+                    powerUp.isPrimed = false
+                    powerUp.isActive = false
+                    viewModel.equippedPowerUps[i] = powerUp
                 }
-                targetingCircle?.alpha = 0
-            } else {
-                targetingCircle?.alpha = 0.5
             }
-            
-            let targetingPowerUp = viewModel.equippedPowerUps
-                .compactMap { $0 }
-                .first { $0.type == .targeting && ($0.isPrimed || $0.isActive) }
+        }
+        targetingCircle?.alpha = 0
+    } else {
+        targetingCircle?.alpha = 0.5
+    }
+    
+    let targetingPowerUp = viewModel.equippedPowerUps
+        .first { $0.type == .targeting && ($0.isPrimed || $0.isActive) }
             
             #if DEBUG
             if let powerUp = targetingPowerUp {
@@ -3329,7 +2649,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let massMultiplier = pow(2.0, maxTierMass - CGFloat(tier))
             var finalMass = baseMass * massMultiplier * ballScale
             
-            if let powerUp = viewModel?.equippedPowerUps.compactMap({ $0 }).first(where: { $0.name == "Super Massive Ball" }) {
+            if let powerUp = viewModel?.equippedPowerUps.first(where: { $0.name == "Super Massive Ball" }) {
                 #if DEBUG
                 print("\nApplying Super Massive Ball physics:")
                 print("- Power-up level: \(powerUp.level)")
@@ -3651,7 +2971,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private func activateTargetingPowerUp(_ powerUp: PowerUp, on sphere: SKSpriteNode) {
         // Find the power-up in the view model to ensure we're modifying the source of truth
-        guard var vmPowerUp = viewModel?.equippedPowerUps.first(where: { $0?.id == powerUp.id })?.flatMap({$0}) else { return }
+        guard var vmPowerUp = viewModel?.equippedPowerUps.first(where: { $0.id == powerUp.id }) else { return }
         
         // Use a charge, and if successful, apply the effect
         guard vmPowerUp.useCharge() else { return }
@@ -3681,7 +3001,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Update all slots in the view model with the modified power-up
         if let viewModel = viewModel {
             for i in viewModel.equippedPowerUps.indices {
-                if viewModel.equippedPowerUps[i]?.id == vmPowerUp.id {
+                if viewModel.equippedPowerUps[i].id == vmPowerUp.id {
                     viewModel.equippedPowerUps[i] = vmPowerUp
                 }
             }
@@ -3701,7 +3021,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func applyLowGravityEffect() {
         // Find the active Low Gravity power-up
         guard let powerUp = viewModel?.equippedPowerUps
-            .compactMap({ $0 })
             .first(where: { $0.name == "Low Gravity" && $0.isActive }) else {
             return
         }
@@ -3967,8 +3286,7 @@ class HapticManager {
     }
     
     func playMergeHaptic() {
-        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics,
-              let engine = engine else { return }
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
         
         let currentTime = Date().timeIntervalSinceReferenceDate
         

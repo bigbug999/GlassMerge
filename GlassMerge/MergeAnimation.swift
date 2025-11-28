@@ -9,6 +9,18 @@ extension GameScene {
         // This ensures other balls react to the new presence, though we'll scale it up
         guard let newSphere = createAndPlaceSphere(at: middlePoint, tier: nextTier) else { return }
         
+        // Apply upward and outward impulse for dynamic jostling
+        if let body = newSphere.physicsBody {
+            // Random horizontal velocity (-200 to 200)
+            let dx = CGFloat.random(in: -200...200)
+            // Upward velocity (300)
+            let dy: CGFloat = 300.0
+            
+            // Apply impulse scaled by mass for consistent effect
+            let impulse = CGVector(dx: dx * body.mass, dy: dy * body.mass)
+            body.applyImpulse(impulse)
+        }
+        
         // Make merged spheres immediately "live" for the danger zone
         newSphere.userData?["creationTime"] = Date.distantPast.timeIntervalSinceReferenceDate
         
@@ -31,6 +43,14 @@ extension GameScene {
         effectNode.position = middlePoint
         effectNode.zPosition = 100
         addChild(effectNode)
+        
+        // Make effectNode follow the newSphere (which is moving due to impulse/gravity)
+        // This ensures the merge animation follows the physics body
+        let followAction = SKAction.customAction(withDuration: 1.0) { [weak newSphere] node, _ in
+            guard let newSphere = newSphere else { return }
+            node.position = newSphere.position
+        }
+        effectNode.run(followAction)
         
         // 3. Create Visual Clones of the merging balls
         func createClone(from original: SKSpriteNode) -> SKSpriteNode {
@@ -69,7 +89,7 @@ extension GameScene {
         // Using a safer approach to ensure effectNode is removed.
         
         let waitAction = SKAction.wait(forDuration: moveDuration)
-        let finishAction = SKAction.run { [weak self, weak newSphere, weak effectNode] in
+        let finishAction = SKAction.run { [weak newSphere, weak effectNode] in
             // Always remove the effect node
             effectNode?.removeFromParent()
             
