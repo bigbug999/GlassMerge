@@ -1791,6 +1791,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let gameOverThreshold: TimeInterval = 5.0
     private var dangerStartTime: TimeInterval?
     private var gridNode: SKNode?
+    private var sphereEffectNode: SKEffectNode?
     private var environmentalBorder: SKShapeNode?
     private var previouslyActiveEnvironmentalPowerUpName: String?
     private let motionManager = CMMotionManager()
@@ -1988,6 +1989,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         setupGrid()
+        setupSphereEffectNode()
         setupDangerZone()
         setupEnvironmentalBorder()
         
@@ -2027,7 +2029,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                         sphere.colorBlendFactor = 0.7
                     }
 
-                    addChild(sphere)
+                    sphereEffectNode?.addChild(sphere)
                     self.currentSphere = sphere
                     restoredCurrentSphere = true
                 }
@@ -2146,6 +2148,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
     
+    private func setupSphereEffectNode() {
+        let effectNode = SKEffectNode()
+        effectNode.shouldEnableEffects = true
+        let filter = MetaballFilter()
+        filter.blurRadius = 10.0
+        filter.threshold = 0.5
+        filter.opacity = 0.8 // Transparent glass
+        effectNode.filter = filter
+        effectNode.zPosition = 10
+        addChild(effectNode)
+        self.sphereEffectNode = effectNode
+    }
+
     func setupDangerZone() {
         let dangerHeight: CGFloat = topBufferHeight
         let dangerRect = CGRect(x: 0, y: frame.height - dangerHeight, width: frame.width, height: dangerHeight)
@@ -2196,7 +2211,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let initialPosition = position ?? CGPoint(x: size.width / 2, y: spawnY)
         sphere.position = initialPosition
         
-        addChild(sphere)
+        sphereEffectNode?.addChild(sphere)
         
         if animated {
             sphere.setScale(0)
@@ -2232,19 +2247,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
     
-    // Generate a flat rainbow circle texture for a given tier
-    private func createRainbowCircleTexture(radius: CGFloat, tier: Int, maxTier: Int) -> SKTexture {
+    // Generate a flat grey circle texture for a given tier
+    private func createGreyCircleTexture(radius: CGFloat, tier: Int, maxTier: Int) -> SKTexture {
         let size = CGSize(width: radius * 2, height: radius * 2)
         
         #if os(iOS)
         // Use Core Graphics on iOS for better performance
         let scale: CGFloat = 2.0 // Use @2x scale for better quality
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size.width * scale, height: size.height * scale))
-        let color = getRainbowColor(for: tier, maxTier: maxTier)
+        let greyValue = getGreyColorValue(for: tier, maxTier: maxTier)
         let image = renderer.image { context in
             let cgContext = context.cgContext
-            // Convert SKColor to CGColor
-            cgContext.setFillColor(color.cgColor)
+            cgContext.setFillColor(red: greyValue, green: greyValue, blue: greyValue, alpha: 1.0)
             cgContext.setStrokeColor(UIColor.clear.cgColor)
             
             // Draw circle
@@ -2255,7 +2269,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         #else
         // Use SpriteKit shape node approach for macOS
         let circle = SKShapeNode(circleOfRadius: radius)
-        circle.fillColor = getRainbowColor(for: tier, maxTier: maxTier)
+        circle.fillColor = getGreyColor(for: tier, maxTier: maxTier)
         circle.strokeColor = .clear
         circle.position = CGPoint(x: radius, y: radius)
         
@@ -2270,15 +2284,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         #endif
     }
     
-    // Get rainbow color for a tier
-    private func getRainbowColor(for tier: Int, maxTier: Int) -> SKColor {
-        // Map tier to hue (0.0 to 1.0)
-        // We want a full spectrum, but maybe skip the very end to avoid red looping back to red if we don't want that.
-        // Let's use 0.0 (Red) to ~0.8 (Purple/Magenta)
-        let hue = CGFloat(tier - 1) / CGFloat(maxTier)
-        
-        // Bright rainbow: High saturation and brightness
-        return SKColor(hue: hue, saturation: 0.9, brightness: 1.0, alpha: 1.0)
+    // Get grey color for a tier (darker for lower tiers, lighter for higher tiers)
+    private func getGreyColor(for tier: Int, maxTier: Int) -> SKColor {
+        let greyValue = getGreyColorValue(for: tier, maxTier: maxTier)
+        return SKColor(white: greyValue, alpha: 1.0)
+    }
+    
+    // Get grey color value (0.0 to 1.0) for a tier
+    private func getGreyColorValue(for tier: Int, maxTier: Int) -> CGFloat {
+        // Interpolate from dark grey (0.2) to light grey (0.8)
+        // Tier 1 = darkest, Tier maxTier = lightest
+        let normalizedTier = CGFloat(tier - 1) / CGFloat(maxTier - 1)
+        return 0.2 + (normalizedTier * 0.6) // Range from 0.2 to 0.8
     }
     
     func createSphereNode(tier: Int) -> SKSpriteNode? {
@@ -2288,8 +2305,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let tierInfo = GameScene.tierData[tierIndex]
         let scaledRadius = tierInfo.radius * ballScale
         
-        // Create sphere with rainbow color
-        let texture = createRainbowCircleTexture(radius: scaledRadius, tier: tier, maxTier: GameScene.tierData.count)
+        // Create sphere with flat grey color instead of texture
+        let texture = createGreyCircleTexture(radius: scaledRadius, tier: tier, maxTier: GameScene.tierData.count)
         let sphere = SKSpriteNode(texture: texture)
         sphere.size = CGSize(width: scaledRadius * 2, height: scaledRadius * 2)
         sphere.name = "sphere"
@@ -2317,7 +2334,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         addPhysics(to: sphere)
-        addChild(sphere)
+        sphereEffectNode?.addChild(sphere)
         return sphere
     }
 
