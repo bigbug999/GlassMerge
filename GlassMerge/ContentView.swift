@@ -418,6 +418,8 @@ class GameViewModel: ObservableObject {
     @Published var highScore: Int = 0
     @Published var isGamePaused: Bool = false
     @Published var selectedFlaskSize: FlaskSize = .small
+    @Published var fps: Int = 0
+    @Published var nodeCount: Int = 0
 
     let powerUpManager: PowerUpManager
     private var run: Run?
@@ -1067,8 +1069,16 @@ struct GameView: View {
             
             VStack {
                 HStack {
-                    Text("Score: \(viewModel.score)")
-                        .font(.headline)
+                    VStack(alignment: .leading) {
+                        Text("Score: \(viewModel.score)")
+                            .font(.headline)
+                        HStack(spacing: 10) {
+                            Text("FPS: \(viewModel.fps)")
+                            Text("Nodes: \(viewModel.nodeCount)")
+                        }
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    }
                     Spacer()
                     Button(action: {
                         isPaused = true
@@ -1745,8 +1755,8 @@ struct SpriteKitContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> SKView {
         let view = SKView()
         view.ignoresSiblingOrder = true
-        view.showsFPS = true
-        view.showsNodeCount = true
+        view.showsFPS = false
+        view.showsNodeCount = false
         
         let scene = GameScene(size: CGSize(width: 375, height: 650))
         scene.scaleMode = .fill
@@ -1795,6 +1805,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var environmentalBorder: SKShapeNode?
     private var previouslyActiveEnvironmentalPowerUpName: String?
     private let motionManager = CMMotionManager()
+    
+    // Debug Stats
+    private var lastUpdateTime: TimeInterval = 0
+    private var frameCount: Int = 0
+    private var timeSinceLastFPSUpdate: TimeInterval = 0
     
     // MARK: - Targeting System
     enum TargetingState {
@@ -2113,7 +2128,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func updateFlaskSize() {
         updateGrid()
         // Rescale existing spheres
-        enumerateChildNodes(withName: "sphere") { node, _ in
+        sphereEffectNode?.enumerateChildNodes(withName: "sphere") { node, _ in
             guard let sphere = node as? SKSpriteNode,
                   let tier = sphere.userData?["tier"] as? Int else { return }
             
@@ -2434,7 +2449,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     func getCurrentSphereStates() -> [Sphere] {
         let context = CoreDataManager.shared.context
-        let states = children.compactMap { node -> Sphere? in
+        let nodesToCheck = sphereEffectNode?.children ?? []
+        let states = nodesToCheck.compactMap { node -> Sphere? in
             guard let sphereNode = node as? SKSpriteNode,
                   sphereNode.name == "sphere",
                   let tier = sphereNode.userData?["tier"] as? Int else { return nil }
@@ -2490,6 +2506,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     override func update(_ currentTime: TimeInterval) {
+        // Calculate FPS and Node Count
+        if lastUpdateTime > 0 {
+            let deltaTime = currentTime - lastUpdateTime
+            frameCount += 1
+            timeSinceLastFPSUpdate += deltaTime
+            
+            if timeSinceLastFPSUpdate >= 0.5 {
+                let fps = Int(Double(frameCount) / timeSinceLastFPSUpdate)
+                let nodeCount = self.children.count
+                
+                DispatchQueue.main.async { [weak self] in
+                    self?.viewModel?.fps = fps
+                    self?.viewModel?.nodeCount = nodeCount
+                }
+                
+                frameCount = 0
+                timeSinceLastFPSUpdate = 0
+            }
+        }
+        lastUpdateTime = currentTime
+
         #if DEBUG
         if let viewModel = viewModel, let tier = viewModel.debug_spawnBallTier {
             let centerPosition = CGPoint(x: frame.midX, y: frame.midY)
