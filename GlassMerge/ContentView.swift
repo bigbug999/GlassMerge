@@ -82,32 +82,42 @@ struct PowerUpStats {
     var duration: TimeInterval?  // nil for single-use effects
     var forceMagnitude: Double
     var massMultiplier: Double = 1.0  // New: Multiplier for physics mass
+    var cooldown: TimeInterval = 15.0 // Base cooldown, modified by level for environmental
     
     static func baseStats(for powerUp: PowerUp) -> PowerUpStats {
         switch powerUp.name {
         // Single-use power-ups (no duration)
         case "Super Massive Ball":
-            return PowerUpStats(duration: nil, forceMagnitude: 0.75, massMultiplier: 2.0)  // Level 1 base stats (50% of previous)
+            return PowerUpStats(duration: nil, forceMagnitude: 0.75, massMultiplier: 2.0, cooldown: 15.0)
         case "Selective Deletion":
-            return PowerUpStats(duration: nil, forceMagnitude: 1.0)
+            return PowerUpStats(duration: nil, forceMagnitude: 1.0, cooldown: 15.0)
             
         // Environmental power-ups (all need duration)
         case "Low Gravity":
-            return PowerUpStats(duration: 60, forceMagnitude: 0.5)
+            return PowerUpStats(duration: 15, forceMagnitude: 0.5, cooldown: 60.0)
         case "Rubber World":
-            return PowerUpStats(duration: 60, forceMagnitude: 1.5)
+            return PowerUpStats(duration: 15, forceMagnitude: 1.5, cooldown: 60.0)
         case "Ice World":
-            return PowerUpStats(duration: 60, forceMagnitude: 0.01) // Extremely slippery
+            return PowerUpStats(duration: 15, forceMagnitude: 0.01, cooldown: 60.0) // Extremely slippery
         case "Tilt World":
-            return PowerUpStats(duration: 45, forceMagnitude: 1.0)
+            return PowerUpStats(duration: 15, forceMagnitude: 1.0, cooldown: 60.0)
             
         default:
-            return PowerUpStats(duration: nil, forceMagnitude: 1.0)
+            return PowerUpStats(duration: nil, forceMagnitude: 1.0, cooldown: 15.0)
         }
     }
     
     func scaled(to level: Int) -> PowerUpStats {
         var stats = self
+        
+        // Scale cooldown for environmental power-ups
+        if stats.duration != nil {
+            // Inverse scaling: 60s -> 30s -> 15s
+             stats.cooldown = stats.cooldown / pow(2.0, Double(level - 1))
+        } else {
+             // Normal scaling for other power-ups (cooldown decreases by 2.5s per level)
+             stats.cooldown = max(5.0, stats.cooldown - (Double(level - 1) * 2.5))
+        }
         
         // Special scaling for Super Massive Ball
         if stats.massMultiplier > 1.0 {  // This identifies Super Massive Ball
@@ -127,12 +137,20 @@ struct PowerUpStats {
                 break
             }
         } else if duration != nil { // This identifies all environmental power-ups
-             if abs(forceMagnitude - 0.01) < 0.001 { // This identifies Ice World
-                // Ice World has no level scaling - always extremely slippery
-                stats.forceMagnitude = 0.01
+            // Scale duration: 15s -> 30s -> 60s
+            if let baseDuration = stats.duration {
+                stats.duration = baseDuration * pow(2.0, Double(level - 1))
             }
-            // For other environmental power-ups like Low Gravity and Rubber World,
-            // we will apply scaling only to their forceMagnitude, not duration.
+            
+             if abs(forceMagnitude - 0.01) < 0.001 { // This identifies Ice World
+                // Ice World has no level scaling for force - always extremely slippery
+                stats.forceMagnitude = 0.01
+            } else if abs(forceMagnitude - 0.5) < 0.001 { // This identifies Low Gravity
+                // Low Gravity has no level scaling for force - always 0.5
+                stats.forceMagnitude = 0.5
+            }
+            // For other environmental power-ups like Rubber World,
+            // we will apply scaling to their forceMagnitude.
             else {
                  let levelMultiplier = Double(level - 1) * 0.25
                  stats.forceMagnitude += levelMultiplier
@@ -182,7 +200,9 @@ struct PowerUp: Identifiable {
     var currentCharges: Int = 1  // Start with 1 charge
     var isRecharging: Bool = false
     var rechargeTimeRemaining: TimeInterval = 0
-    var rechargeDuration: TimeInterval = 15.0
+    var rechargeDuration: TimeInterval {
+        return currentStats.cooldown
+    }
     
     var canBeUsed: Bool {
         return currentCharges > 0 && !isRecharging
@@ -191,8 +211,8 @@ struct PowerUp: Identifiable {
     // Upgrade costs
     var upgradeCost: Int {
         switch level {
-        case 1: return 50 // Cost to upgrade to level 2
-        case 2: return 100 // Cost to upgrade to level 3
+        case 1: return cost * 2 // Cost to upgrade to level 2
+        case 2: return cost * 4 // Cost to upgrade to level 3
         default: return Int.max // No upgrade available
         }
     }
@@ -242,7 +262,7 @@ class PowerUpManager: ObservableObject {
             category: .gravity,
             type: .singleUse,
             icon: "circle.circle.fill",
-            isUnlocked: false,
+            isUnlocked: true, // Unlocked by default
             level: 1,
             cost: 25
         ),
@@ -258,6 +278,7 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 25
         ),
+        /* DEPRECATED
         PowerUp(
             name: "Rubber World",
             description: "Makes all surfaces and balls extremely bouncy",
@@ -268,6 +289,7 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 25
         ),
+        */
         PowerUp(
             name: "Ice World",
             description: "Makes all surfaces ultra slippery with minimal friction",
@@ -276,7 +298,7 @@ class PowerUpManager: ObservableObject {
             icon: "snowflake",
             isUnlocked: false,
             level: 1,
-            cost: 25
+            cost: 50
         ),
         PowerUp(
             name: "Tilt World",
@@ -286,10 +308,11 @@ class PowerUpManager: ObservableObject {
             icon: "move.3d",
             isUnlocked: false,
             level: 1,
-            cost: 25
+            cost: 100
         ),
         
         // TARGETING POWER-UPS (affect existing balls)
+        /* DEPRECATED
         PowerUp(
             name: "Selective Deletion",
             description: "Tap-to-select mechanic for strategic ball removal",
@@ -300,6 +323,7 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 25
         )
+        */
     ]
     
     // Game currency and progression
@@ -321,10 +345,38 @@ class PowerUpManager: ObservableObject {
         self.currency = Int(gameData.currency)
         
         let progressions = gameData.powerUpProgressions as? Set<PowerUpProgression> ?? []
-        for progression in progressions {
-            if let index = powerUps.firstIndex(where: { $0.name == progression.id }) {
-                powerUps[index].isUnlocked = progression.isUnlocked
-                powerUps[index].level = Int(progression.level)
+        
+        // If there are no progressions stored, create them for current powerups
+        if progressions.isEmpty {
+            for i in powerUps.indices {
+                let progression = PowerUpProgression(context: CoreDataManager.shared.context)
+                progression.id = powerUps[i].name
+                progression.isUnlocked = powerUps[i].isUnlocked // Use default value
+                progression.level = Int64(powerUps[i].level)
+                gameData.addToPowerUpProgressions(progression)
+            }
+            CoreDataManager.shared.saveContext()
+        } else {
+            // Update in-memory power-ups with saved progression
+            for progression in progressions {
+                if let index = powerUps.firstIndex(where: { $0.name == progression.id }) {
+                    powerUps[index].isUnlocked = progression.isUnlocked
+                    powerUps[index].level = Int(progression.level)
+                }
+            }
+            
+            // Check for any new power-ups not in progression and add them
+            for i in powerUps.indices {
+                if !progressions.contains(where: { $0.id == powerUps[i].name }) {
+                    let progression = PowerUpProgression(context: CoreDataManager.shared.context)
+                    progression.id = powerUps[i].name
+                    progression.isUnlocked = powerUps[i].isUnlocked // Use default value
+                    progression.level = Int64(powerUps[i].level)
+                    gameData.addToPowerUpProgressions(progression)
+                }
+            }
+            if gameData.hasChanges {
+                CoreDataManager.shared.saveContext()
             }
         }
     }
@@ -1553,70 +1605,139 @@ struct UpgradeShopView: View {
                         .font(.headline)
                         .padding(.horizontal)
                     
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    VStack(spacing: 12) {
                         ForEach(sortedPowerUps) { powerUp in
-                            if powerUp.isUnlocked {
-                                VStack(spacing: 4) {
-                                    PowerUpSlot(powerUp: powerUp)
-                                    Text(powerUp.name)
-                                        .font(.caption)
-                                        .multilineTextAlignment(.center)
-                                        .lineLimit(2)
-                                    
-                                    Spacer(minLength: 0)
-
+                            Button(action: {
+                                if powerUp.isUnlocked {
                                     if powerUp.level < PowerUp.maxLevel {
-                                        Button("Upgrade (\(powerUp.upgradeCost) C)") {
-                                            if powerUpManager.upgrade(powerUp) {
-                                                // The @Published property will update the view
+                                        _ = powerUpManager.upgrade(powerUp)
+                                    }
+                                } else {
+                                    _ = powerUpManager.unlock(powerUp)
+                                }
+                            }) {
+                                HStack(alignment: .top, spacing: 12) {
+                                    // Icon Section
+                                    VStack {
+                                        PowerUpSlot(powerUp: powerUp)
+                                            .frame(width: 60, height: 60)
+                                        if powerUp.isUnlocked {
+                                            Text("Lvl \(powerUp.level)")
+                                                .font(.caption)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.blue.opacity(0.3))
+                                                .cornerRadius(4)
+                                        }
+                                    }
+                                    
+                                    // Content Section
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text(powerUp.name)
+                                                .font(.headline)
+                                            Spacer()
+                                            // Cost/Status
+                                            if !powerUp.isUnlocked {
+                                                 HStack(spacing: 4) {
+                                                     Image(systemName: "lock.fill")
+                                                     Text("\(powerUp.cost)")
+                                                 }
+                                                 .foregroundColor(powerUpManager.currency >= powerUp.cost ? .yellow : .gray)
+                                            } else if powerUp.level < PowerUp.maxLevel {
+                                                 HStack(spacing: 4) {
+                                                     Image(systemName: "arrow.up.circle.fill")
+                                                     Text("\(powerUp.upgradeCost)")
+                                                 }
+                                                 .foregroundColor(powerUpManager.currency >= powerUp.upgradeCost ? .yellow : .gray)
+                                            } else {
+                                                Text("MAX")
+                                                    .foregroundColor(.green)
+                                                    .fontWeight(.bold)
                                             }
                                         }
-                                        .font(.caption2)
-                                        .buttonStyle(.bordered)
-                                        .disabled(powerUpManager.currency < powerUp.upgradeCost)
-                                    } else {
-                                        Text("Max Level")
+                                        
+                                        Text(powerUp.description)
                                             .font(.caption)
-                                            .foregroundColor(.green)
+                                            .foregroundColor(.gray)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .padding(.bottom, 4)
+                                        
+                                        // Stats Section
+                                        if powerUp.isUnlocked {
+                                            HStack(alignment: .top, spacing: 16) {
+                                                // Current Stats
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text("Current")
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(.secondary)
+                                                    
+                                                    let stats = powerUp.currentStats
+                                                    Text("Cooldown: \(Int(stats.cooldown))s")
+                                                    
+                                                    if let duration = stats.duration {
+                                                        Text("Duration: \(Int(duration))s")
+                                                    }
+                                                    
+                                                    if powerUp.name == "Super Massive Ball" {
+                                                        Text("Mass: \(String(format: "%.1fx", stats.massMultiplier))")
+                                                        Text("Force: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                    } else if powerUp.name == "Low Gravity" {
+                                                        Text("Gravity: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                    } else if powerUp.name == "Rubber World" {
+                                                        Text("Bounce: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                    } else if powerUp.name == "Ice World" {
+                                                        Text("Friction: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                    }
+                                                }
+                                                .font(.caption2)
+                                                
+                                                // Next Level Stats
+                                                if powerUp.level < PowerUp.maxLevel {
+                                                    Image(systemName: "arrow.right")
+                                                        .font(.caption)
+                                                        .foregroundColor(.gray)
+                                                        .padding(.top, 12)
+                                                    
+                                                    VStack(alignment: .leading, spacing: 2) {
+                                                        Text("Level \(powerUp.level + 1)")
+                                                            .font(.system(size: 10))
+                                                            .foregroundColor(.green)
+                                                        
+                                                        let stats = powerUp.baseStats.scaled(to: powerUp.level + 1)
+                                                        Text("Cooldown: \(Int(stats.cooldown))s")
+                                                        
+                                                        if let duration = stats.duration {
+                                                            Text("Duration: \(Int(duration))s")
+                                                        }
+                                                        
+                                                        if powerUp.name == "Super Massive Ball" {
+                                                            Text("Mass: \(String(format: "%.1fx", stats.massMultiplier))")
+                                                            Text("Force: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                        } else if powerUp.name == "Low Gravity" {
+                                                            Text("Gravity: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                        } else if powerUp.name == "Rubber World" {
+                                                            Text("Bounce: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                        } else if powerUp.name == "Ice World" {
+                                                            Text("Friction: \(String(format: "%.2f", stats.forceMagnitude))")
+                                                        }
+                                                    }
+                                                    .font(.caption2)
+                                                    .foregroundColor(.green)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                                .padding(6)
-                                .frame(width: 100, height: 120)
+                                .padding()
                                 .background(
                                     RoundedRectangle(cornerRadius: 10)
                                         .fill(Color(white: 0.15))
                                 )
-                            } else {
-                                Button(action: {
-                                    _ = powerUpManager.unlock(powerUp)
-                                }) {
-                                    VStack(spacing: 4) {
-                                        PowerUpSlot(powerUp: powerUp)
-                                        Text(powerUp.name)
-                                            .font(.caption)
-                                            .multilineTextAlignment(.center)
-                                            .lineLimit(2)
-
-                                        Spacer(minLength: 0)
-                                        
-                                        HStack {
-                                            Image(systemName: "lock.fill")
-                                            Text("\(powerUp.cost) Coins")
-                                        }
-                                        .font(.caption)
-                                        .foregroundColor(powerUpManager.currency >= powerUp.cost ? .yellow : .gray)
-                                    }
-                                    .padding(6)
-                                    .frame(width: 100, height: 120)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .fill(Color(white: 0.15))
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(powerUpManager.currency < powerUp.cost)
-                                .opacity(powerUpManager.currency >= powerUp.cost ? 1.0 : 0.6)
                             }
+                            .buttonStyle(.plain)
+                            .disabled((!powerUp.isUnlocked && powerUpManager.currency < powerUp.cost) || (powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && powerUpManager.currency < powerUp.upgradeCost))
+                            .opacity((!powerUp.isUnlocked && powerUpManager.currency < powerUp.cost) || (powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && powerUpManager.currency < powerUp.upgradeCost) ? 0.6 : 1.0)
                         }
                     }
                 }
@@ -1975,8 +2096,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         // Setup boundary physics body that extends above the visible area, with a ceiling.
         let extendedHeight = self.frame.height * 2
-        let physicsRect = CGRect(x: self.frame.minX, y: self.frame.minY, width: self.frame.width, height: extendedHeight)
-        let frameBody = SKPhysicsBody(edgeLoopFrom: physicsRect)
+        // Extend the bottom slightly to ensure balls sit flush with the visual border and match rounded corners
+        let bottomOffset: CGFloat = 2.0
+        let physicsRect = CGRect(x: self.frame.minX, y: self.frame.minY - bottomOffset, width: self.frame.width, height: extendedHeight + bottomOffset)
+        
+        // Create a rounded rect path to match the visual style
+        let cornerRadius: CGFloat = 12
+        let path = CGPath(roundedRect: physicsRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        
+        let frameBody = SKPhysicsBody(edgeLoopFrom: path)
         frameBody.friction = 0.2
         frameBody.restitution = 0.2
         self.physicsBody = frameBody

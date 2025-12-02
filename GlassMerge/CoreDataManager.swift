@@ -62,8 +62,8 @@ final class CoreDataManager {
         let initialProgressions = PowerUpManager().powerUps.map { powerUp -> PowerUpProgression in
             let progression = PowerUpProgression(context: context)
             progression.id = powerUp.name
-            // Unlock "Super Massive Ball", "Selective Deletion", and "Low Gravity" by default
-            progression.isUnlocked = (powerUp.name == "Super Massive Ball" || powerUp.name == "Selective Deletion" || powerUp.name == "Low Gravity")
+            // Unlock only "Super Massive Ball" by default
+            progression.isUnlocked = (powerUp.name == "Super Massive Ball")
             progression.level = 1
             return progression
         }
