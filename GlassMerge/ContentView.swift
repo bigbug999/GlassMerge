@@ -88,7 +88,7 @@ struct PowerUpStats {
         switch powerUp.name {
         // Single-use power-ups (no duration)
         case "Super Massive Ball":
-            return PowerUpStats(duration: nil, forceMagnitude: 0.75, massMultiplier: 2.0, cooldown: 15.0)
+            return PowerUpStats(duration: nil, forceMagnitude: 0.75, massMultiplier: 2.0, cooldown: 60.0)
         case "Selective Deletion":
             return PowerUpStats(duration: nil, forceMagnitude: 1.0, cooldown: 15.0)
             
@@ -121,6 +121,9 @@ struct PowerUpStats {
         
         // Special scaling for Super Massive Ball
         if stats.massMultiplier > 1.0 {  // This identifies Super Massive Ball
+            // Scale cooldown: 60s -> 30s -> 15s (divide by 2 for each level)
+            stats.cooldown = stats.cooldown / pow(2.0, Double(level - 1))
+            
             switch level {
             case 1:
                 // Base level stats (already set)
@@ -191,6 +194,7 @@ struct PowerUp: Identifiable {
     var isPrimed: Bool = false
     var isActive: Bool = false
     var remainingDuration: TimeInterval = 0 // Only for environmental power-ups
+    var remainingCooldown: TimeInterval = 0 // Cooldown timer for environmental power-ups (starts after effect ends)
     var hasBeenOffered: Bool = false
     var slotsOccupied: Int {
         return 1 // Always occupy 1 slot regardless of level
@@ -205,7 +209,15 @@ struct PowerUp: Identifiable {
     }
     
     var canBeUsed: Bool {
+        // For environmental power-ups, also check cooldown
+        if type == .environment {
+            return currentCharges > 0 && !isRecharging && remainingCooldown <= 0 && !isActive
+        }
         return currentCharges > 0 && !isRecharging
+    }
+    
+    var isOnCooldown: Bool {
+        return type == .environment && remainingCooldown > 0
     }
     
     // Upgrade costs
@@ -224,7 +236,9 @@ struct PowerUp: Identifiable {
         if currentCharges > 0 {
             currentCharges -= 1
             
-            if currentCharges == 0 {
+            // For environmental power-ups, don't start recharge - cooldown handles timing
+            // Recharge will be handled separately if needed
+            if currentCharges == 0 && type != .environment {
                 startRecharge()
             }
             return true
@@ -264,7 +278,7 @@ class PowerUpManager: ObservableObject {
             icon: "circle.circle.fill",
             isUnlocked: true, // Unlocked by default
             level: 1,
-            cost: 25
+            cost: 15
         ),
         
         // ENVIRONMENTAL POWER-UPS (affect entire play area)
@@ -276,7 +290,7 @@ class PowerUpManager: ObservableObject {
             icon: "arrow.down.circle",
             isUnlocked: false,
             level: 1,
-            cost: 25
+            cost: 15
         ),
         /* DEPRECATED
         PowerUp(
@@ -298,7 +312,7 @@ class PowerUpManager: ObservableObject {
             icon: "snowflake",
             isUnlocked: false,
             level: 1,
-            cost: 50
+            cost: 30
         ),
         PowerUp(
             name: "Tilt World",
@@ -308,7 +322,7 @@ class PowerUpManager: ObservableObject {
             icon: "move.3d",
             isUnlocked: false,
             level: 1,
-            cost: 100
+            cost: 45
         ),
         
         // TARGETING POWER-UPS (affect existing balls)
@@ -496,6 +510,9 @@ class GameViewModel: ObservableObject {
         self.run = gameData.currentRun
         self.highScore = Int(gameData.highScore)
         
+        // Ensure progression is loaded before filtering
+        powerUpManager.loadProgression()
+        
         // Initialize with all unlocked power-ups
         self.equippedPowerUps = powerUpManager.powerUps.filter { $0.isUnlocked }
         
@@ -503,7 +520,69 @@ class GameViewModel: ObservableObject {
             self.applyRunState(run)
         }
         
+        // After applying run state (or for new runs), refresh equippedPowerUps to ensure
+        // all unlocked powerups are included and states are properly synced
+        refreshEquippedPowerUps()
+        
         startPowerUpTimer()
+    }
+    
+    private func refreshEquippedPowerUps() {
+        // Reload progression to ensure we have the latest unlock states
+        powerUpManager.loadProgression()
+        
+        // Get all currently unlocked powerups from the manager
+        let allUnlocked = powerUpManager.powerUps.filter { $0.isUnlocked }
+        
+        // If no powerups are unlocked, clear equippedPowerUps and return
+        guard !allUnlocked.isEmpty else {
+            equippedPowerUps = []
+            return
+        }
+        
+        // Create a map of current equipped powerups by name to preserve their state
+        // Use name as the key since UUID is generated fresh each time
+        var equippedMap: [String: PowerUp] = [:]
+        for powerUp in equippedPowerUps {
+            equippedMap[powerUp.name] = powerUp
+        }
+        
+        // Build new equipped list with all unlocked powerups, preserving state from equippedMap
+        var newEquipped: [PowerUp] = []
+        for unlockedPowerUp in allUnlocked {
+            if let existing = equippedMap[unlockedPowerUp.name] {
+                // Preserve existing runtime state (active, primed, timers, charges) 
+                // but ALWAYS update unlock status and level from manager (progression)
+                var updated = existing
+                updated.isUnlocked = unlockedPowerUp.isUnlocked
+                // Always use the level from progression, not from saved run
+                let oldLevel = updated.level
+                updated.level = unlockedPowerUp.level
+                if oldLevel != updated.level {
+                    #if DEBUG
+                    print("refreshEquippedPowerUps: Updated \(unlockedPowerUp.name) level from \(oldLevel) to \(updated.level)")
+                    #endif
+                }
+                newEquipped.append(updated)
+            } else {
+                // Newly unlocked powerup or powerup not in equipped list yet, add it
+                newEquipped.append(unlockedPowerUp)
+            }
+        }
+        
+        equippedPowerUps = newEquipped
+        
+        // Safety check: if we somehow ended up with no powerups but there are unlocked ones, repopulate
+        if equippedPowerUps.isEmpty && !allUnlocked.isEmpty {
+            #if DEBUG
+            print("refreshEquippedPowerUps: WARNING - equippedPowerUps is empty but \(allUnlocked.count) powerups are unlocked! Repopulating...")
+            #endif
+            equippedPowerUps = allUnlocked
+        }
+        
+        #if DEBUG
+        print("refreshEquippedPowerUps: Found \(allUnlocked.count) unlocked powerups, equippedPowerUps now has \(equippedPowerUps.count) powerups")
+        #endif
     }
     
     deinit {
@@ -536,16 +615,33 @@ class GameViewModel: ObservableObject {
                 if powerUp.remainingDuration > 0 {
                     powerUp.remainingDuration = max(0, powerUp.remainingDuration - deltaTime)
                     
-                    // Deactivate if duration is up
+                    // Deactivate if duration is up and start cooldown
                     if powerUp.remainingDuration == 0 {
                         powerUp.isActive = false
                         powerUp.isPrimed = false
+                        // Start cooldown timer after effect ends
+                        powerUp.remainingCooldown = powerUp.currentStats.cooldown
                         #if DEBUG
-                        print("\(powerUp.name) deactivated due to duration end!")
+                        print("\(powerUp.name) deactivated due to duration end! Starting cooldown: \(powerUp.remainingCooldown)s")
                         #endif
                     }
                     equippedPowerUps[i] = powerUp
                 }
+            }
+            
+            // Update cooldown timer for environmental power-ups (only when not active)
+            if powerUp.type == .environment && !powerUp.isActive && powerUp.remainingCooldown > 0 {
+                powerUp.remainingCooldown = max(0, powerUp.remainingCooldown - deltaTime)
+                
+                // When cooldown ends, restore the charge so it can be used again
+                if powerUp.remainingCooldown == 0 && powerUp.currentCharges == 0 {
+                    powerUp.currentCharges = 1
+                    #if DEBUG
+                    print("\(powerUp.name) cooldown ended, charge restored!")
+                    #endif
+                }
+                
+                equippedPowerUps[i] = powerUp
             }
         }
     }
@@ -556,15 +652,22 @@ class GameViewModel: ObservableObject {
         self.selectedFlaskSize = FlaskSize(rawValue: run.selectedFlaskSize ?? "small") ?? .small
         
         // Restore equipped power-ups
-        if let equipped = run.equippedPowerUps as? Set<EquippedPowerUp> {
+        if let equipped = run.equippedPowerUps as? Set<EquippedPowerUp>, !equipped.isEmpty {
+            #if DEBUG
+            print("GameViewModel: Restoring \(equipped.count) saved powerups from run")
+            #endif
             for savedPowerUp in equipped {
                 if let index = equippedPowerUps.firstIndex(where: { $0.name == savedPowerUp.id }) {
                     var instance = equippedPowerUps[index]
+                    // Restore runtime state (active, primed, timers, charges)
                     instance.isActive = savedPowerUp.isActive
                     instance.isPrimed = savedPowerUp.isPrimed
                     instance.remainingDuration = savedPowerUp.remainingDuration
+                    instance.remainingCooldown = savedPowerUp.remainingCooldown
                     instance.currentCharges = Int(savedPowerUp.currentCharges)
                     instance.isRecharging = savedPowerUp.isRecharging
+                    // DO NOT restore level from saved run - always use current progression level
+                    // The level in instance is already correct from powerUpManager.powerUps
                     // Merges until recharge is deprecated, but we can initialize rechargeTimeRemaining if needed
                     // For now, if it was recharging, just restart the timer to full duration or 0 if unknown
                     if instance.isRecharging {
@@ -586,19 +689,27 @@ class GameViewModel: ObservableObject {
                         print("Restored recharging power-up: \(instance.name)")
                     }
                     #endif
+                } else {
+                    #if DEBUG
+                    print("GameViewModel: Warning - saved powerup '\(savedPowerUp.id ?? "unknown")' not found in equippedPowerUps")
+                    #endif
                 }
             }
+        } else {
+            #if DEBUG
+            print("GameViewModel: No saved powerups in run (new run or empty), will use initialized powerups")
+            #endif
         }
 
         #if DEBUG
-        print("GameViewModel: Restored from Core Data Run object.")
+        print("GameViewModel: Restored from Core Data Run object. equippedPowerUps count: \(equippedPowerUps.count)")
         #endif
     }
     
     
     func activatePowerUp(_ powerUpToActivate: PowerUp) {
-        // Find the power-up in equipped slots
-        guard let index = equippedPowerUps.firstIndex(where: { $0.id == powerUpToActivate.id }) else { return }
+        // Find the power-up in equipped slots by name (since UUID is generated fresh each time)
+        guard let index = equippedPowerUps.firstIndex(where: { $0.name == powerUpToActivate.name }) else { return }
         var powerUp = equippedPowerUps[index]
         
         #if DEBUG
@@ -649,10 +760,14 @@ class GameViewModel: ObservableObject {
                 return
             }
 
-            // Check if power-up can be used by checking charges directly
-            guard powerUp.currentCharges > 0 else {
+            // Check if power-up can be used (charges, cooldown, etc.)
+            guard powerUp.canBeUsed else {
                 #if DEBUG
-                print("Cannot activate \(powerUp.name): no charges available.")
+                if powerUp.remainingCooldown > 0 {
+                    print("Cannot activate \(powerUp.name): on cooldown for \(powerUp.remainingCooldown)s")
+                } else {
+                    print("Cannot activate \(powerUp.name): no charges available.")
+                }
                 #endif
                 return
             }
@@ -671,11 +786,15 @@ class GameViewModel: ObservableObject {
                 }
             }
 
-            // Activate the selected power-up
+            // Activate the selected power-up (cooldown will start after effect ends)
             if powerUp.useCharge() {
                 powerUp.isActive = true
                 powerUp.isPrimed = false // No more priming
                 powerUp.remainingDuration = powerUp.currentStats.duration ?? 0
+                powerUp.remainingCooldown = 0 // Reset cooldown when activating (it will start after effect ends)
+                // Ensure recharge is not active for environmental power-ups (cooldown handles timing)
+                powerUp.isRecharging = false
+                powerUp.rechargeTimeRemaining = 0
                 #if DEBUG
                 print("\(powerUp.name) activated with duration: \(powerUp.remainingDuration)s!")
                 #endif
@@ -791,6 +910,7 @@ class GameViewModel: ObservableObject {
             equipped.isActive = powerUp.isActive
             equipped.isPrimed = powerUp.isPrimed
             equipped.remainingDuration = powerUp.remainingDuration
+            equipped.remainingCooldown = powerUp.remainingCooldown
             equipped.type = powerUp.type.rawValue
             equipped.currentCharges = Int64(powerUp.currentCharges)
             equipped.isRecharging = powerUp.isRecharging
@@ -1159,7 +1279,11 @@ struct GameView: View {
                 
                 Spacer()
                 
-                PowerUpSlotView(powerUps: $viewModel.equippedPowerUps, onActivate: viewModel.activatePowerUp)
+                PowerUpSlotView(
+                    powerUpManager: powerUpManager,
+                    equippedPowerUps: $viewModel.equippedPowerUps,
+                    onActivate: viewModel.activatePowerUp
+                )
                     .padding(.bottom)
             }
             
@@ -1223,27 +1347,49 @@ struct GameView: View {
 }
 
 struct PowerUpSlotView: View {
-    @Binding var powerUps: [PowerUp]
+    let powerUpManager: PowerUpManager
+    @Binding var equippedPowerUps: [PowerUp]
     let onActivate: (PowerUp) -> Void
-    let slotSize: CGFloat = 50
+    let slotHeight: CGFloat = 50
     let spacing: CGFloat = 12
+    let horizontalPadding: CGFloat = 16
+    
+    // Get all 4 power-ups in order, using equipped version if unlocked, nil if locked
+    private var allPowerUps: [PowerUp?] {
+        powerUpManager.powerUps.map { powerUp in
+            // If unlocked, return the equipped version (which has current state), otherwise nil
+            // Match by name since UUID is generated fresh each time
+            if powerUp.isUnlocked {
+                return equippedPowerUps.first { $0.name == powerUp.name } ?? powerUp
+            } else {
+                return nil
+            }
+        }
+    }
     
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: spacing) {
-                ForEach(powerUps) { powerUp in
+        GeometryReader { geometry in
+            let availableWidth = geometry.size.width - (horizontalPadding * 2)
+            let slotWidth = (availableWidth - (spacing * 3)) / 4 // 4 power-ups with 3 gaps between them
+            
+            HStack(alignment: .top, spacing: spacing) {
+                ForEach(Array(allPowerUps.enumerated()), id: \.offset) { index, powerUp in
                     PowerUpSlot(
                         powerUp: powerUp
                     )
-                    .frame(width: slotSize)
+                    .frame(width: slotWidth, height: slotHeight)
                     .onTapGesture {
-                        onActivate(powerUp)
+                        if let powerUp = powerUp {
+                            onActivate(powerUp)
+                        }
                     }
                 }
+                Spacer() // Push power-ups to the left
             }
-            .padding(.horizontal)
+            .padding(.horizontal, horizontalPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: slotSize + 10)
+        .frame(height: slotHeight)
     }
 }
 
@@ -1298,62 +1444,73 @@ struct PowerUpSlot: View {
     }
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Background and border
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(strokeColor, lineWidth: strokeWidth)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.gray.opacity(0.1))
-                    )
-                
-                // Duration progress for active environmental power-ups
-                if let powerUp = powerUp,
-                   powerUp.type == .environment,
-                   powerUp.isActive,
-                   let duration = powerUp.currentStats.duration {
-                    let progress = powerUp.remainingDuration / duration
+        ZStack {
+            // Background and border
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(strokeColor, lineWidth: strokeWidth)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(powerUp == nil ? Color.gray.opacity(0.05) : Color.gray.opacity(0.1))
+                )
+            
+            // Duration progress for active environmental power-ups
+            if let powerUp = powerUp,
+               powerUp.type == .environment,
+               powerUp.isActive,
+               let duration = powerUp.currentStats.duration {
+                let progress = powerUp.remainingDuration / duration
+                GeometryReader { geometry in
+                    let circleSize = min(geometry.size.width, geometry.size.height) * 0.7
                     Circle()
                         .trim(from: 0, to: CGFloat(progress))
                         .stroke(strokeColor.opacity(0.3), lineWidth: 3)
                         .rotationEffect(.degrees(-90))
-                        .frame(width: 40, height: 40)
+                        .frame(width: circleSize, height: circleSize)
+                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 }
-                
-                // Icon and level
-                Group {
-                    if let powerUp = powerUp {
-                        VStack(spacing: 2) {
-                            Image(systemName: powerUp.icon)
-                                .foregroundColor(powerUp.canBeUsed ? 
-                                    (powerUp.isActive ? .blue : .blue.opacity(powerUp.isPrimed ? 0.5 : 1)) :
-                                    .gray)
-                                .font(.system(size: 20))
-                            
-                            if powerUp.level > 1 {
-                                Text("Lv\(powerUp.level)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.gray)
-                            }
-                            
-                            // Show recharge timer if recharging
-                            if powerUp.isRecharging {
-                                Text("\(Int(ceil(powerUp.rechargeTimeRemaining)))s")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    } else {
-                        Image(systemName: "questionmark.circle")
-                            .foregroundColor(.gray.opacity(0.5))
+            }
+            
+            // Icon and level
+            Group {
+                if let powerUp = powerUp {
+                    VStack(spacing: 2) {
+                        Image(systemName: powerUp.icon)
+                            .foregroundColor(powerUp.canBeUsed ? 
+                                (powerUp.isActive ? .blue : .blue.opacity(powerUp.isPrimed ? 0.5 : 1)) :
+                                .gray)
                             .font(.system(size: 20))
+                        
+                        if powerUp.level > 1 {
+                            Text("Lv\(powerUp.level)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        // Show cooldown timer for environmental power-ups (priority over recharge)
+                        if powerUp.type == .environment && powerUp.remainingCooldown > 0 {
+                            Text("\(Int(ceil(powerUp.remainingCooldown)))s")
+                                .font(.system(size: 10))
+                                .foregroundColor(.gray)
+                        }
+                        // Show recharge timer if recharging (only for non-environmental power-ups)
+                        else if powerUp.isRecharging && powerUp.type != .environment {
+                            Text("\(Int(ceil(powerUp.rechargeTimeRemaining)))s")
+                                .font(.system(size: 10))
+                                .foregroundColor(.gray)
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // Locked placeholder
+                    Image(systemName: "lock.fill")
+                        .foregroundColor(.gray.opacity(0.6))
+                        .font(.system(size: 20))
                 }
-                
-                // Recharge progress bar at bottom
-                if let powerUp = powerUp, powerUp.isRecharging {
+            }
+            
+            // Recharge progress bar at bottom
+            if let powerUp = powerUp, powerUp.isRecharging {
+                GeometryReader { geometry in
                     Rectangle()
                         .fill(Color.blue.opacity(0.3))
                         .frame(width: geometry.size.width * rechargeProgress, height: 3)
@@ -1361,7 +1518,7 @@ struct PowerUpSlot: View {
                 }
             }
         }
-        .frame(height: 50)
+        .clipped()
     }
 }
 
