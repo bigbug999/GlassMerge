@@ -29,11 +29,22 @@ final class CoreDataManager {
         if context.hasChanges {
             do {
                 try context.save()
+                #if DEBUG
+                print("[CoreDataManager] saveContext: Changes saved successfully")
+                #endif
             } catch {
                 let nserror = error as NSError
                 fatalError("Unresolved error \(nserror), \(nserror.userInfo)")
             }
         }
+    }
+    
+    /// Refreshes all objects in the context to ensure we have the latest data from the store
+    func refreshContext() {
+        context.refreshAllObjects()
+        #if DEBUG
+        print("[CoreDataManager] refreshContext: All objects refreshed")
+        #endif
     }
     
     // MARK: - Game State Helpers
@@ -43,12 +54,36 @@ final class CoreDataManager {
         
         do {
             let results = try context.fetch(request)
+            
+            #if DEBUG
+            if results.count > 1 {
+                print("[CoreDataManager] WARNING: Found \(results.count) GameData objects! Cleaning up duplicates...")
+                // Keep the first one, delete the rest
+                for i in 1..<results.count {
+                    context.delete(results[i])
+                }
+                saveContext()
+            }
+            #endif
+            
             if let gameData = results.first {
+                #if DEBUG
+                let progressions = gameData.powerUpProgressions as? Set<PowerUpProgression> ?? []
+                let unlockedCount = progressions.filter { $0.isUnlocked }.count
+                print("[CoreDataManager] getGameData: Found existing GameData with \(progressions.count) progressions (\(unlockedCount) unlocked)")
+                for prog in progressions {
+                    print("  - \(prog.id ?? "nil"): isUnlocked=\(prog.isUnlocked)")
+                }
+                #endif
                 return gameData
             }
         } catch {
-            print("Failed to fetch GameData: \(error)")
+            print("[CoreDataManager] Failed to fetch GameData: \(error)")
         }
+        
+        #if DEBUG
+        print("[CoreDataManager] Creating new GameData...")
+        #endif
         
         // If no GameData exists, create a new one
         let newGameData = GameData(context: context)
@@ -59,17 +94,29 @@ final class CoreDataManager {
         newGameData.unlockedFlaskSizes = FlaskSize.small.rawValue
         
         // Create initial progression for all power-ups
-        let initialProgressions = PowerUpManager().powerUps.map { powerUp -> PowerUpProgression in
+        // Use hardcoded default unlock values since this is a fresh install
+        let defaultPowerUpNames = ["Super Massive Ball", "Low Gravity", "Ice World", "Tilt World"]
+        var initialProgressions: [PowerUpProgression] = []
+        
+        for name in defaultPowerUpNames {
             let progression = PowerUpProgression(context: context)
-            progression.id = powerUp.name
+            progression.id = name
             // Unlock only "Super Massive Ball" by default
-            progression.isUnlocked = (powerUp.name == "Super Massive Ball")
+            progression.isUnlocked = (name == "Super Massive Ball")
             progression.level = 1
-            return progression
+            initialProgressions.append(progression)
+            #if DEBUG
+            print("[CoreDataManager] Created progression for \(name): isUnlocked=\(progression.isUnlocked)")
+            #endif
         }
         newGameData.addToPowerUpProgressions(NSSet(array: initialProgressions))
         
         saveContext()
+        
+        #if DEBUG
+        print("[CoreDataManager] Created new GameData with \(initialProgressions.count) progressions")
+        #endif
+        
         return newGameData
     }
 

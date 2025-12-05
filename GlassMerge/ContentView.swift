@@ -268,7 +268,11 @@ struct PowerUp: Identifiable {
 }
 
 class PowerUpManager: ObservableObject {
-    @Published var powerUps: [PowerUp] = [
+    // MARK: - Singleton
+    static let shared = PowerUpManager()
+    
+    // Default power-up definitions (used to reset state)
+    private static let defaultPowerUps: [PowerUp] = [
         // SINGLE-USE POWER-UPS (affect next spawned ball)
         PowerUp(
             name: "Super Massive Ball",
@@ -292,18 +296,6 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 15
         ),
-        /* DEPRECATED
-        PowerUp(
-            name: "Rubber World",
-            description: "Makes all surfaces and balls extremely bouncy",
-            category: .physics,
-            type: .environment,
-            icon: "arrow.up.and.down.circle",
-            isUnlocked: false,
-            level: 1,
-            cost: 25
-        ),
-        */
         PowerUp(
             name: "Ice World",
             description: "Makes all surfaces ultra slippery with minimal friction",
@@ -324,44 +316,56 @@ class PowerUpManager: ObservableObject {
             level: 1,
             cost: 45
         ),
-        
-        // TARGETING POWER-UPS (affect existing balls)
-        /* DEPRECATED
-        PowerUp(
-            name: "Selective Deletion",
-            description: "Tap-to-select mechanic for strategic ball removal",
-            category: .void,
-            type: .targeting,
-            icon: "trash.circle.fill",
-            isUnlocked: false,
-            level: 1,
-            cost: 25
-        )
-        */
     ]
+    
+    @Published var powerUps: [PowerUp] = PowerUpManager.defaultPowerUps
     
     // Game currency and progression
     @Published var currency: Int = 0
-    private var gameData: GameData?
     
     // Track which power-ups have been offered in this run
     private var offeredPowerUps = Set<UUID>()
 
-    init() {
-        self.gameData = CoreDataManager.shared.getGameData()
-        self.loadProgression()
+    private init() {
+        #if DEBUG
+        print("[PowerUpManager] INIT v2 - Singleton being initialized")
+        #endif
+        // Load progression on init
+        reloadFromCoreData()
     }
-
-    func loadProgression() {
-        self.gameData = CoreDataManager.shared.getGameData() // Ensure gameData is fresh
-        guard let gameData = self.gameData else { return }
+    
+    // MARK: - Core Data Synchronization
+    
+    /// Reloads all powerup and currency data from Core Data.
+    /// Call this whenever you need to ensure the in-memory state matches persisted state.
+    func reloadFromCoreData() {
+        #if DEBUG
+        print("[PowerUpManager] reloadFromCoreData() called")
+        print("  - Before reload, in-memory unlocked: \(powerUps.filter { $0.isUnlocked }.map { $0.name })")
+        #endif
         
+        // Refresh the Core Data context to ensure we have the latest data
+        CoreDataManager.shared.refreshContext()
+        
+        let gameData = CoreDataManager.shared.getGameData()
+        
+        // Update currency
         self.currency = Int(gameData.currency)
         
         let progressions = gameData.powerUpProgressions as? Set<PowerUpProgression> ?? []
         
+        #if DEBUG
+        print("  - Core Data has \(progressions.count) progressions")
+        for prog in progressions {
+            print("    - \(prog.id ?? "nil"): isUnlocked=\(prog.isUnlocked), level=\(prog.level)")
+        }
+        #endif
+        
         // If there are no progressions stored, create them for current powerups
         if progressions.isEmpty {
+            #if DEBUG
+            print("[PowerUpManager] No progressions found, creating initial ones...")
+            #endif
             for i in powerUps.indices {
                 let progression = PowerUpProgression(context: CoreDataManager.shared.context)
                 progression.id = powerUps[i].name
@@ -370,12 +374,32 @@ class PowerUpManager: ObservableObject {
                 gameData.addToPowerUpProgressions(progression)
             }
             CoreDataManager.shared.saveContext()
+            #if DEBUG
+            print("[PowerUpManager] Created initial progressions for \(powerUps.count) powerups")
+            #endif
         } else {
             // Update in-memory power-ups with saved progression
             for progression in progressions {
-                if let index = powerUps.firstIndex(where: { $0.name == progression.id }) {
+                // Unwrap the optional id to ensure we have a valid name
+                guard let progressionId = progression.id, !progressionId.isEmpty else {
+                    #if DEBUG
+                    print("[PowerUpManager] WARNING: progression has nil or empty id!")
+                    #endif
+                    continue
+                }
+                
+                if let index = powerUps.firstIndex(where: { $0.name == progressionId }) {
+                    let wasUnlocked = powerUps[index].isUnlocked
                     powerUps[index].isUnlocked = progression.isUnlocked
                     powerUps[index].level = Int(progression.level)
+                    #if DEBUG
+                    print("[PowerUpManager] Synced '\(progressionId)': wasUnlocked=\(wasUnlocked) -> isUnlocked=\(progression.isUnlocked)")
+                    #endif
+                } else {
+                    #if DEBUG
+                    print("[PowerUpManager] WARNING: progression '\(progressionId)' not found in powerUps array!")
+                    print("  - Available powerups: \(powerUps.map { $0.name })")
+                    #endif
                 }
             }
             
@@ -387,16 +411,28 @@ class PowerUpManager: ObservableObject {
                     progression.isUnlocked = powerUps[i].isUnlocked // Use default value
                     progression.level = Int64(powerUps[i].level)
                     gameData.addToPowerUpProgressions(progression)
+                    #if DEBUG
+                    print("[PowerUpManager] Added missing powerup to progressions: \(powerUps[i].name)")
+                    #endif
                 }
             }
             if gameData.hasChanges {
                 CoreDataManager.shared.saveContext()
             }
         }
+        
+        #if DEBUG
+        let unlockedNames = powerUps.filter { $0.isUnlocked }.map { $0.name }
+        print("[PowerUpManager] reloadFromCoreData complete:")
+        print("  - currency: \(currency)")
+        print("  - unlocked powerups: \(unlockedNames)")
+        #endif
     }
 
     func getUnlockedFlaskSizes() -> Set<FlaskSize> {
-        guard let rawSizes = gameData?.unlockedFlaskSizes else { return [.small] }
+        // Always get fresh data from Core Data
+        let gameData = CoreDataManager.shared.getGameData()
+        guard let rawSizes = gameData.unlockedFlaskSizes, !rawSizes.isEmpty else { return [.small] }
         let sizeStrings = rawSizes.split(separator: ",").map(String.init)
         return Set(sizeStrings.compactMap(FlaskSize.init))
     }
@@ -422,26 +458,96 @@ class PowerUpManager: ObservableObject {
         return powerUps.filter { !offeredPowerUps.contains($0.id) }
     }
     
+    /// Returns a list of all currently unlocked power-ups (fresh from in-memory state after reloadFromCoreData)
+    func getUnlockedPowerUps() -> [PowerUp] {
+        return powerUps.filter { $0.isUnlocked }
+    }
+    
     // MARK: - Power-up Management
     
     func unlock(_ powerUp: PowerUp) -> Bool {
-        guard let gameData = gameData, !powerUp.isUnlocked && currency >= powerUp.cost else { return false }
+        #if DEBUG
+        print("[PowerUpManager] unlock() called for: \(powerUp.name)")
+        print("  - powerUp.isUnlocked: \(powerUp.isUnlocked)")
+        print("  - currency: \(currency), cost: \(powerUp.cost)")
+        #endif
+        
+        let gameData = CoreDataManager.shared.getGameData()
+        
+        guard !powerUp.isUnlocked && currency >= powerUp.cost else {
+            #if DEBUG
+            print("[PowerUpManager] unlock() guard failed - already unlocked: \(powerUp.isUnlocked), can afford: \(currency >= powerUp.cost)")
+            #endif
+            return false
+        }
+        
         currency -= powerUp.cost
         gameData.currency = Int64(currency)
 
-        if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
-            powerUps[index].isUnlocked = true
+        if let index = powerUps.firstIndex(where: { $0.name == powerUp.name }) {
+            // Create a mutable copy, modify it, and reassign to trigger @Published
+            var updatedPowerUp = powerUps[index]
+            updatedPowerUp.isUnlocked = true
+            powerUps[index] = updatedPowerUp
+            
+            // Also manually trigger the publisher to ensure SwiftUI updates
+            objectWillChange.send()
+            
+            #if DEBUG
+            print("[PowerUpManager] Updated in-memory powerUps[\(index)].isUnlocked = true")
+            print("[PowerUpManager] Triggered objectWillChange.send()")
+            #endif
+            
             // Also update the Core Data progression
-            if let progression = (gameData.powerUpProgressions as? Set<PowerUpProgression>)?.first(where: { $0.id == powerUp.name }) {
+            let progressions = gameData.powerUpProgressions as? Set<PowerUpProgression> ?? []
+            #if DEBUG
+            print("[PowerUpManager] Found \(progressions.count) progressions in Core Data")
+            #endif
+            
+            if let progression = progressions.first(where: { $0.id == powerUp.name }) {
                 progression.isUnlocked = true
+                #if DEBUG
+                print("[PowerUpManager] Updated Core Data progression for \(powerUp.name): isUnlocked = \(progression.isUnlocked)")
+                #endif
+            } else {
+                #if DEBUG
+                print("[PowerUpManager] ERROR: Could not find progression for \(powerUp.name) in Core Data!")
+                print("  Available progressions: \(progressions.map { $0.id ?? "nil" })")
+                #endif
+                // Create the missing progression
+                let newProgression = PowerUpProgression(context: CoreDataManager.shared.context)
+                newProgression.id = powerUp.name
+                newProgression.isUnlocked = true
+                newProgression.level = Int64(powerUp.level)
+                gameData.addToPowerUpProgressions(newProgression)
+                #if DEBUG
+                print("[PowerUpManager] Created missing progression for \(powerUp.name)")
+                #endif
             }
+        } else {
+            #if DEBUG
+            print("[PowerUpManager] ERROR: Could not find powerup \(powerUp.name) in powerUps array!")
+            #endif
         }
+        
         CoreDataManager.shared.saveContext()
+        
+        #if DEBUG
+        // Verify the save worked
+        let verifyGameData = CoreDataManager.shared.getGameData()
+        let verifyProgressions = verifyGameData.powerUpProgressions as? Set<PowerUpProgression> ?? []
+        if let verifyProg = verifyProgressions.first(where: { $0.id == powerUp.name }) {
+            print("[PowerUpManager] Verification: \(powerUp.name) isUnlocked = \(verifyProg.isUnlocked)")
+        }
+        #endif
+        
         return true
     }
     
     func unlockFlaskSize(_ size: FlaskSize) -> Bool {
-        guard let gameData = gameData, !getUnlockedFlaskSizes().contains(size) && currency >= size.cost else { return false }
+        let gameData = CoreDataManager.shared.getGameData()
+        guard !getUnlockedFlaskSizes().contains(size) && currency >= size.cost else { return false }
+        
         currency -= size.cost
         gameData.currency = Int64(currency)
         
@@ -450,18 +556,26 @@ class PowerUpManager: ObservableObject {
         gameData.unlockedFlaskSizes = currentSizes.map { $0.rawValue }.joined(separator: ",")
         
         CoreDataManager.shared.saveContext()
+        #if DEBUG
+        print("[PowerUpManager] Unlocked flask size: \(size.rawValue)")
+        #endif
         return true
     }
     
     func upgrade(_ powerUp: PowerUp) -> Bool {
-        guard let gameData = gameData, powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && currency >= powerUp.upgradeCost else { return false }
+        let gameData = CoreDataManager.shared.getGameData()
+        guard powerUp.isUnlocked && powerUp.level < PowerUp.maxLevel && currency >= powerUp.upgradeCost else { return false }
+        
         currency -= powerUp.upgradeCost
         gameData.currency = Int64(currency)
 
-        if let index = powerUps.firstIndex(where: { $0.id == powerUp.id }) {
+        if let index = powerUps.firstIndex(where: { $0.name == powerUp.name }) {
             powerUps[index].level += 1
-             if let progression = (gameData.powerUpProgressions as? Set<PowerUpProgression>)?.first(where: { $0.id == powerUp.name }) {
+            if let progression = (gameData.powerUpProgressions as? Set<PowerUpProgression>)?.first(where: { $0.id == powerUp.name }) {
                 progression.level = Int64(powerUps[index].level)
+                #if DEBUG
+                print("[PowerUpManager] Upgraded powerup: \(powerUp.name) to level \(powerUps[index].level)")
+                #endif
             }
         }
         CoreDataManager.shared.saveContext()
@@ -475,6 +589,17 @@ class PowerUpManager: ObservableObject {
             return true
         }
         return false
+    }
+    
+    /// Adds currency and persists to Core Data
+    func addCurrency(_ amount: Int) {
+        let gameData = CoreDataManager.shared.getGameData()
+        currency += amount
+        gameData.currency = Int64(currency)
+        CoreDataManager.shared.saveContext()
+        #if DEBUG
+        print("[PowerUpManager] Added \(amount) currency, new total: \(currency)")
+        #endif
     }
 }
 
@@ -510,11 +635,16 @@ class GameViewModel: ObservableObject {
         self.run = gameData.currentRun
         self.highScore = Int(gameData.highScore)
         
-        // Ensure progression is loaded before filtering
-        // powerUpManager.loadProgression() // Removing redundant call that causes SwiftUI update warnings
+        // CRITICAL: Reload powerup data from Core Data to ensure we have the latest unlock states
+        // This ensures that any powerups unlocked in the shop are reflected here
+        powerUpManager.reloadFromCoreData()
         
-        // Initialize with all unlocked power-ups
-        self.equippedPowerUps = powerUpManager.powerUps.filter { $0.isUnlocked }
+        // Initialize with all unlocked power-ups from the freshly reloaded manager
+        self.equippedPowerUps = powerUpManager.getUnlockedPowerUps()
+        
+        #if DEBUG
+        print("[GameViewModel] init: Loaded \(equippedPowerUps.count) unlocked powerups")
+        #endif
         
         if let run = self.run {
             self.applyRunState(run)
@@ -528,11 +658,11 @@ class GameViewModel: ObservableObject {
     }
     
     private func refreshEquippedPowerUps() {
-        // Reload progression to ensure we have the latest unlock states
-        // powerUpManager.loadProgression() // Removing redundant call that causes SwiftUI update warnings
+        // Reload from Core Data to ensure we have the absolute latest unlock states
+        powerUpManager.reloadFromCoreData()
         
         // Get all currently unlocked powerups from the manager
-        let allUnlocked = powerUpManager.powerUps.filter { $0.isUnlocked }
+        let allUnlocked = powerUpManager.getUnlockedPowerUps()
         
         // If no powerups are unlocked, clear equippedPowerUps and return
         guard !allUnlocked.isEmpty else {
@@ -560,12 +690,15 @@ class GameViewModel: ObservableObject {
                 updated.level = unlockedPowerUp.level
                 if oldLevel != updated.level {
                     #if DEBUG
-                    print("refreshEquippedPowerUps: Updated \(unlockedPowerUp.name) level from \(oldLevel) to \(updated.level)")
+                    print("[GameViewModel] refreshEquippedPowerUps: Updated \(unlockedPowerUp.name) level from \(oldLevel) to \(updated.level)")
                     #endif
                 }
                 newEquipped.append(updated)
             } else {
                 // Newly unlocked powerup or powerup not in equipped list yet, add it
+                #if DEBUG
+                print("[GameViewModel] refreshEquippedPowerUps: Adding newly unlocked powerup: \(unlockedPowerUp.name)")
+                #endif
                 newEquipped.append(unlockedPowerUp)
             }
         }
@@ -575,13 +708,13 @@ class GameViewModel: ObservableObject {
         // Safety check: if we somehow ended up with no powerups but there are unlocked ones, repopulate
         if equippedPowerUps.isEmpty && !allUnlocked.isEmpty {
             #if DEBUG
-            print("refreshEquippedPowerUps: WARNING - equippedPowerUps is empty but \(allUnlocked.count) powerups are unlocked! Repopulating...")
+            print("[GameViewModel] refreshEquippedPowerUps: WARNING - equippedPowerUps is empty but \(allUnlocked.count) powerups are unlocked! Repopulating...")
             #endif
             equippedPowerUps = allUnlocked
         }
         
         #if DEBUG
-        print("refreshEquippedPowerUps: Found \(allUnlocked.count) unlocked powerups, equippedPowerUps now has \(equippedPowerUps.count) powerups")
+        print("[GameViewModel] refreshEquippedPowerUps: Found \(allUnlocked.count) unlocked powerups, equippedPowerUps now has \(equippedPowerUps.count) powerups")
         #endif
     }
     
@@ -928,18 +1061,20 @@ class GameViewModel: ObservableObject {
     func endRun() {
         // Calculate and award currency before deleting the run
         let coinsEarned = Int(ceil(Double(score) / 10.0))
-        powerUpManager.currency += coinsEarned
         
-        if let gameData = self.run?.gameData {
-            gameData.currency = Int64(powerUpManager.currency)
-        }
+        // Use the proper method to add currency and persist
+        powerUpManager.addCurrency(coinsEarned)
         
         if let run = self.run {
              CoreDataManager.shared.context.delete(run)
+             CoreDataManager.shared.saveContext()
         }
         
-        CoreDataManager.shared.saveContext()
         self.run = nil
+        
+        #if DEBUG
+        print("[GameViewModel] endRun: Awarded \(coinsEarned) coins")
+        #endif
     }
     
     func earnScore(points: Int = 1) {
@@ -976,7 +1111,10 @@ class GameViewModel: ObservableObject {
     
     func reset() {
         score = 0
-        equippedPowerUps = powerUpManager.powerUps.filter { $0.isUnlocked }
+        
+        // Reload from Core Data to get the latest unlock states
+        powerUpManager.reloadFromCoreData()
+        equippedPowerUps = powerUpManager.getUnlockedPowerUps()
         
         if let run = self.run {
              CoreDataManager.shared.context.delete(run)
@@ -985,6 +1123,10 @@ class GameViewModel: ObservableObject {
         self.run = nil
         selectedFlaskSize = .small
         powerUpManager.resetOfferedPowerUps() // Reset offered power-ups when starting new game
+        
+        #if DEBUG
+        print("[GameViewModel] reset: Loaded \(equippedPowerUps.count) unlocked powerups")
+        #endif
     }
 
     #if DEBUG
@@ -997,6 +1139,8 @@ class GameViewModel: ObservableObject {
 struct ContentView: View {
     @State private var currentScreen: GameScreen = .mainMenu
     @State private var gameData: GameData? = nil
+    // Use ObservedObject for singleton since we don't own its lifecycle
+    @ObservedObject private var powerUpManager = PowerUpManager.shared
     
     enum GameScreen {
         case mainMenu
@@ -1038,6 +1182,7 @@ struct ContentView: View {
             }
             .navigationBarBackButtonHidden(true)
         }
+        .environmentObject(powerUpManager)
         .preferredColorScheme(.dark)
     }
 }
@@ -1046,7 +1191,7 @@ struct MainMenuView: View {
     @Binding var currentScreen: ContentView.GameScreen
     @State private var hasSave: Bool = CoreDataManager.shared.hasActiveRun()
     @State private var highScore: Int = 0
-    @StateObject private var powerUpManager = PowerUpManager()
+    @EnvironmentObject var powerUpManager: PowerUpManager
     var onNewGame: (() -> Void)? = nil
     var onContinue: (() -> Void)? = nil
     
@@ -1112,15 +1257,15 @@ struct MainMenuView: View {
         .onAppear {
             hasSave = CoreDataManager.shared.hasActiveRun()
             highScore = Int(CoreDataManager.shared.getGameData().highScore)
-            // The powerUpManager now loads its own data, so we just need to trigger a view update.
-            // By being a @StateObject, it will reload when the view appears.
+            // Reload powerup data from Core Data to ensure we have the latest state
+            powerUpManager.reloadFromCoreData()
         }
     }
 }
 
 struct RunSetupView: View {
     @Binding var currentScreen: ContentView.GameScreen
-    @StateObject private var powerUpManager = PowerUpManager()
+    @EnvironmentObject var powerUpManager: PowerUpManager
     @State private var selectedFlaskSize: FlaskSize = .small
     let onGameStart: (Run) -> Void
     
@@ -1168,6 +1313,10 @@ struct RunSetupView: View {
             }
             .buttonStyle(.borderedProminent)
             .padding()
+        }
+        .onAppear {
+            // Reload to ensure we have the latest flask unlock state
+            powerUpManager.reloadFromCoreData()
         }
     }
 }
@@ -1221,7 +1370,7 @@ struct FlaskSizeOption: View {
 
 struct GameView: View {
     @Binding var currentScreen: ContentView.GameScreen
-    @StateObject private var powerUpManager = PowerUpManager()
+    @EnvironmentObject var powerUpManager: PowerUpManager
     @StateObject private var viewModel: GameViewModel
     @State private var isPaused: Bool = false
     @State private var isGameOver: Bool = false
@@ -1230,8 +1379,8 @@ struct GameView: View {
     
     init(currentScreen: Binding<ContentView.GameScreen>, gameData: GameData) {
         self._currentScreen = currentScreen
-        let manager = PowerUpManager()
-        self._powerUpManager = StateObject(wrappedValue: manager)
+        // Use the shared PowerUpManager singleton
+        let manager = PowerUpManager.shared
         self._viewModel = StateObject(wrappedValue: GameViewModel(powerUpManager: manager, gameData: gameData))
     }
     
@@ -1820,7 +1969,7 @@ struct PauseMenuView: View {
 
 struct UpgradeShopView: View {
     @Binding var currentScreen: ContentView.GameScreen
-    @StateObject private var powerUpManager = PowerUpManager()
+    @EnvironmentObject var powerUpManager: PowerUpManager
     let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
     
     private var sortedPowerUps: [PowerUp] {
@@ -1856,10 +2005,30 @@ struct UpgradeShopView: View {
                 .font(.title)
                 .padding(.bottom)
             
-            Text("Coins: \(powerUpManager.currency)")
-                .font(.title2)
-                .foregroundColor(.yellow)
-                .padding(.bottom)
+            HStack {
+                Text("Coins: \(powerUpManager.currency)")
+                    .font(.title2)
+                    .foregroundColor(.yellow)
+                
+                #if DEBUG
+                Button(action: {
+                    print("[Shop] Manual refresh triggered")
+                    powerUpManager.reloadFromCoreData()
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundColor(.blue)
+                }
+                #endif
+            }
+            .padding(.bottom)
+            
+            #if DEBUG
+            // Debug info
+            let unlockedCount = powerUpManager.powerUps.filter { $0.isUnlocked }.count
+            Text("Unlocked: \(unlockedCount)/\(powerUpManager.powerUps.count)")
+                .font(.caption)
+                .foregroundColor(.gray)
+            #endif
             
             ScrollView {
                 // Flasks Section
@@ -2054,7 +2223,7 @@ struct UpgradeShopView: View {
         }
         .onAppear {
             // Reload data when the view appears to get the latest currency and unlocks
-            powerUpManager.loadProgression()
+            powerUpManager.reloadFromCoreData()
         }
     }
 }
@@ -2062,7 +2231,7 @@ struct UpgradeShopView: View {
 
 struct SettingsView: View {
     @Binding var currentScreen: ContentView.GameScreen
-    @StateObject private var powerUpManager = PowerUpManager()
+    @EnvironmentObject var powerUpManager: PowerUpManager
     
     var body: some View {
         VStack {
@@ -2092,16 +2261,13 @@ struct SettingsView: View {
                 Button("Reset Progress") {
                     CoreDataManager.shared.resetGameData()
                     // Reload data to reflect changes
-                    powerUpManager.loadProgression()
+                    powerUpManager.reloadFromCoreData()
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
                 
                 Button("Add 1000 Coins") {
-                    powerUpManager.currency += 1000
-                    let gameData = CoreDataManager.shared.getGameData()
-                    gameData.currency = Int64(powerUpManager.currency)
-                    CoreDataManager.shared.saveContext()
+                    powerUpManager.addCurrency(1000)
                 }
                 .buttonStyle(.bordered)
             }
