@@ -19,8 +19,8 @@ extension GameScene {
                 $0.name == "Low Gravity" && $0.isActive 
             }) ?? false
             
-            // Upward velocity - much stronger during low gravity for floaty effect!
-            let dy: CGFloat = isLowGravActive ? 800.0 : 300.0
+            // Upward velocity - stronger during low gravity for floaty effect!
+            let dy: CGFloat = isLowGravActive ? 600.0 : 300.0
             
             // Apply impulse scaled by mass for consistent effect
             let impulse = CGVector(dx: dx * body.mass, dy: dy * body.mass)

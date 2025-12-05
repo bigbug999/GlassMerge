@@ -1239,28 +1239,102 @@ struct GameView: View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
-            VStack {
+            VStack(spacing: 16) {
                 HStack {
-                    VStack(alignment: .leading) {
-                        Text("Score: \(viewModel.score)")
-                            .font(.headline)
-                        HStack(spacing: 10) {
-                            Text("FPS: \(viewModel.fps)")
-                            Text("Nodes: \(viewModel.nodeCount)")
-                        }
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    // Score in glass chip
+                    HStack(spacing: 6) {
+                        Text("Score:")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Text("\(viewModel.score)")
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                Capsule()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                .white.opacity(0.15),
+                                                .white.opacity(0.05),
+                                                .clear
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                            )
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(
+                                        LinearGradient(
+                                            colors: [
+                                                .white.opacity(0.4),
+                                                .white.opacity(0.1),
+                                                .white.opacity(0.05)
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1
+                                    )
+                            )
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+                    
                     Spacer()
+                    
+                    // Pause button in glass style
                     Button(action: {
                         isPaused = true
                     }) {
-                        Image(systemName: "pause.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.blue)
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        Circle()
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [
+                                                        .white.opacity(0.15),
+                                                        .white.opacity(0.05),
+                                                        .clear
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                )
+                                            )
+                                    )
+                                    .overlay(
+                                        Circle()
+                                            .strokeBorder(
+                                                LinearGradient(
+                                                    colors: [
+                                                        .white.opacity(0.4),
+                                                        .white.opacity(0.1),
+                                                        .white.opacity(0.05)
+                                                    ],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                ),
+                                                lineWidth: 1
+                                            )
+                                    )
+                            )
+                            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
                     }
                 }
-                .padding()
+                .frame(width: 375)
+                .padding(.horizontal)
                 
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
@@ -1277,15 +1351,13 @@ struct GameView: View {
                     #endif
                 }
                 
-                Spacer()
-                
                 PowerUpSlotView(
                     powerUpManager: powerUpManager,
                     equippedPowerUps: $viewModel.equippedPowerUps,
                     onActivate: viewModel.activatePowerUp
                 )
-                    .padding(.bottom)
             }
+            .padding(.top, 20)
             
             if isPaused {
                 Color.black.opacity(0.7)
@@ -1581,7 +1653,7 @@ struct PowerUpSlot: View {
                     }
                     .frame(height: 3)
                     .padding(.horizontal, 8)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 4)
                 }
             }
             
@@ -3449,25 +3521,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
         
-        // Calculate gravity reduction based on level - VERY FLOATY!
-        // Level 1: 0.12x normal gravity (dy: -1.18) - super floaty
-        // Level 2: 0.06x normal gravity (dy: -0.59) - extremely floaty
-        // Level 3: 0.02x normal gravity (dy: -0.20) - near zero-g, balls fly high!
+        // Low gravity - constant floaty effect at all levels
+        // 20% of normal gravity (dy: -1.96) - floaty but balls still move at good speed
         let baseGravity: CGFloat = -9.8
-        let baseReduction: CGFloat = 0.12 // 12% of normal gravity at level 1 - very floaty!
-        
-        // Use exponential scaling for even more dramatic effect at higher levels
-        let gravityMultiplier: CGFloat
-        switch powerUp.level {
-        case 1:
-            gravityMultiplier = baseReduction // 88% reduction - super floaty
-        case 2:
-            gravityMultiplier = baseReduction * 0.5 // 94% reduction - extremely floaty
-        case 3:
-            gravityMultiplier = baseReduction * 0.17 // 98% reduction - near zero-g!
-        default:
-            gravityMultiplier = baseReduction
-        }
+        let gravityMultiplier: CGFloat = 0.20 // 80% reduction - same at all levels
         
         let newGravity = baseGravity * gravityMultiplier
         
