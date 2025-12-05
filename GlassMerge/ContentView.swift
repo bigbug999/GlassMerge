@@ -511,7 +511,7 @@ class GameViewModel: ObservableObject {
         self.highScore = Int(gameData.highScore)
         
         // Ensure progression is loaded before filtering
-        powerUpManager.loadProgression()
+        // powerUpManager.loadProgression() // Removing redundant call that causes SwiftUI update warnings
         
         // Initialize with all unlocked power-ups
         self.equippedPowerUps = powerUpManager.powerUps.filter { $0.isUnlocked }
@@ -529,7 +529,7 @@ class GameViewModel: ObservableObject {
     
     private func refreshEquippedPowerUps() {
         // Reload progression to ensure we have the latest unlock states
-        powerUpManager.loadProgression()
+        // powerUpManager.loadProgression() // Removing redundant call that causes SwiftUI update warnings
         
         // Get all currently unlocked powerups from the manager
         let allUnlocked = powerUpManager.powerUps.filter { $0.isUnlocked }
@@ -1264,7 +1264,7 @@ struct GameView: View {
                 
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.gray.opacity(0.3), lineWidth: 2)
+                        .stroke(Color.gray.opacity(0.5), lineWidth: 2)
                         .frame(width: 375, height: 650)
                     
                     #if os(iOS)
@@ -1406,119 +1406,198 @@ struct PowerUpSlot: View {
         self.totalSlots = totalSlots
     }
     
-    private var strokeColor: Color {
-        guard let powerUp = powerUp else { return Color.gray.opacity(0.3) }
-        
-        // If power-up can't be used, show muted colors
-        if !powerUp.canBeUsed {
-            if powerUp.isActive {
-                return .blue.opacity(0.3)
-            }
-            if powerUp.isPrimed { // For targeting power-ups
-                return .blue.opacity(0.15)
-            }
-            return Color.gray.opacity(0.15)
+    
+    // Whether the button should appear disabled (not active power-ups - they should glow)
+    private var isDisabled: Bool {
+        guard let powerUp = powerUp else { return true }
+        // Active or primed power-ups should NOT appear disabled
+        if powerUp.isActive || powerUp.isPrimed {
+            return false
         }
+        return !powerUp.canBeUsed
+    }
+    
+    // Icon color based on power-up state
+    private var iconColor: Color {
+        guard let powerUp = powerUp else { return .gray.opacity(0.3) }
+        
+        // Active power-ups get bright white (check first before canBeUsed)
+        if powerUp.isActive {
+            return .white
+        }
+        
+        if powerUp.isPrimed {
+            return .white.opacity(0.8)
+        }
+        
+        if !powerUp.canBeUsed {
+            return .gray.opacity(0.4)
+        }
+        
+        return .white
+    }
+    
+    // Accent color for active states
+    private var accentColor: Color {
+        guard let powerUp = powerUp else { return .clear }
         
         if powerUp.isActive {
-            return .blue
+            return .white
         }
         
-        if powerUp.isPrimed { // For targeting power-ups
-            return .blue.opacity(0.5)
+        if powerUp.isPrimed {
+            return .white.opacity(0.6)
         }
         
-        return Color.gray.opacity(0.3)
+        return .clear
     }
     
-    private var strokeWidth: CGFloat {
-        guard let powerUp = powerUp else { return 2 }
-        return (powerUp.isActive || powerUp.isPrimed) ? 3 : 2
-    }
-    
-    private var rechargeProgress: CGFloat {
-        guard let powerUp = powerUp,
-              powerUp.isRecharging else { return 0 }
-        let progress = 1.0 - (CGFloat(powerUp.rechargeTimeRemaining) / CGFloat(powerUp.rechargeDuration))
-        return max(0.0, min(1.0, progress)) // Clamp progress between 0 and 1
+    // Cooldown progress (0 = ready, 1 = full cooldown)
+    private var cooldownProgress: CGFloat {
+        guard let powerUp = powerUp else { return 0 }
+        
+        // Environmental power-ups use remainingCooldown
+        if powerUp.type == .environment && powerUp.remainingCooldown > 0 {
+            let totalCooldown = powerUp.currentStats.cooldown
+            return CGFloat(powerUp.remainingCooldown / totalCooldown)
+        }
+        
+        // Other power-ups use recharge
+        if powerUp.isRecharging {
+            return CGFloat(powerUp.rechargeTimeRemaining / powerUp.rechargeDuration)
+        }
+        
+        return 0
     }
     
     var body: some View {
         ZStack {
-            // Background and border
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(strokeColor, lineWidth: strokeWidth)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(powerUp == nil ? Color.gray.opacity(0.05) : Color.gray.opacity(0.1))
-                )
+            // Glass background - different style for disabled vs enabled
+            if isDisabled {
+                // Disabled: darker, flatter, more muted
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.black.opacity(0.3))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color.gray.opacity(0.2), lineWidth: 1)
+                    )
+            } else {
+                // Enabled: glass effect with material blur
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        // Subtle gradient highlight for glass effect
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.15),
+                                        .white.opacity(0.05),
+                                        .clear,
+                                        .clear
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        // Border with glass-like appearance
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.4),
+                                        .white.opacity(0.1),
+                                        .white.opacity(0.05)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+            }
             
-            // Duration progress for active environmental power-ups
+            // Duration progress ring for active environmental power-ups
             if let powerUp = powerUp,
                powerUp.type == .environment,
                powerUp.isActive,
                let duration = powerUp.currentStats.duration {
                 let progress = powerUp.remainingDuration / duration
                 GeometryReader { geometry in
-                    let circleSize = min(geometry.size.width, geometry.size.height) * 0.7
+                    let circleSize = min(geometry.size.width, geometry.size.height) * 0.75
                     Circle()
                         .trim(from: 0, to: CGFloat(progress))
-                        .stroke(strokeColor.opacity(0.3), lineWidth: 3)
+                        .stroke(
+                            Color.white.opacity(0.8),
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                        )
                         .rotationEffect(.degrees(-90))
                         .frame(width: circleSize, height: circleSize)
                         .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 }
             }
             
-            // Icon and level
-            Group {
+            // Main content
+            VStack(spacing: 2) {
                 if let powerUp = powerUp {
-                    VStack(spacing: 2) {
-                        Image(systemName: powerUp.icon)
-                            .foregroundColor(powerUp.canBeUsed ? 
-                                (powerUp.isActive ? .blue : .blue.opacity(powerUp.isPrimed ? 0.5 : 1)) :
-                                .gray)
-                            .font(.system(size: 20))
-                        
-                        if powerUp.level > 1 {
-                            Text("Lv\(powerUp.level)")
-                                .font(.system(size: 10))
-                                .foregroundColor(.gray)
-                        }
-                        
-                        // Show cooldown timer for environmental power-ups (priority over recharge)
-                        if powerUp.type == .environment && powerUp.remainingCooldown > 0 {
-                            Text("\(Int(ceil(powerUp.remainingCooldown)))s")
-                                .font(.system(size: 10))
-                                .foregroundColor(.gray)
-                        }
-                        // Show recharge timer if recharging (only for non-environmental power-ups)
-                        else if powerUp.isRecharging && powerUp.type != .environment {
-                            Text("\(Int(ceil(powerUp.rechargeTimeRemaining)))s")
-                                .font(.system(size: 10))
-                                .foregroundColor(.gray)
+                    Image(systemName: powerUp.icon)
+                        .foregroundStyle(iconColor)
+                        .font(.system(size: 20, weight: .semibold))
+                        .shadow(color: .white.opacity(powerUp.isActive ? 0.6 : 0), radius: 6)
+                        .symbolEffect(.pulse, options: .repeating, isActive: powerUp.isActive)
+                    
+                    if powerUp.level > 1 {
+                        Text("Lv\(powerUp.level)")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                } else {
+                    // Locked placeholder - very muted
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.gray.opacity(0.25))
+                        .font(.system(size: 16))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            // Cooldown bar at bottom (grey)
+            if cooldownProgress > 0 {
+                VStack {
+                    Spacer()
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            // Background track
+                            Capsule()
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(width: geometry.size.width, height: 3)
+                            // Progress (depletes as cooldown completes)
+                            Capsule()
+                                .fill(Color.gray.opacity(0.6))
+                                .frame(width: geometry.size.width * cooldownProgress, height: 3)
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    // Locked placeholder
-                    Image(systemName: "lock.fill")
-                        .foregroundColor(.gray.opacity(0.6))
-                        .font(.system(size: 20))
+                    .frame(height: 3)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
                 }
             }
             
-            // Recharge progress bar at bottom
-            if let powerUp = powerUp, powerUp.isRecharging {
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.blue.opacity(0.3))
-                        .frame(width: geometry.size.width * rechargeProgress, height: 3)
-                        .position(x: geometry.size.width * rechargeProgress / 2, y: geometry.size.height - 2)
-                }
+            // Active state glow ring (white)
+            if let powerUp = powerUp, (powerUp.isActive || powerUp.isPrimed) {
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(
+                        Color.white.opacity(powerUp.isActive ? 0.8 : 0.4),
+                        lineWidth: 2
+                    )
+                    .shadow(color: .white.opacity(powerUp.isActive ? 0.5 : 0.2), radius: 8)
             }
         }
-        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .animation(.easeInOut(duration: 0.2), value: powerUp?.isActive)
+        .animation(.easeInOut(duration: 0.2), value: powerUp?.isPrimed)
     }
 }
 
@@ -2476,7 +2555,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         let bottomLine = SKShapeNode(path: path)
         bottomLine.name = "dangerZoneLine"
-        bottomLine.strokeColor = .gray
+        bottomLine.strokeColor = SKColor(white: 0.5, alpha: 0.3)
         bottomLine.lineWidth = 2
         dangerZone?.addChild(bottomLine)
         
@@ -2811,6 +2890,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
         }
         lastUpdateTime = currentTime
+        
+        // Update holographic rainbow effect time
+        if let filter = sphereEffectNode?.filter as? MetaballFilter {
+            // Use a wrapping time value to avoid precision issues over long runs
+            // Slowing down the effect by factor of 10 (dividing time by 10.0)
+            let timeLoop = CGFloat((currentTime * 0.1).truncatingRemainder(dividingBy: 10000.0))
+            filter.time = timeLoop
+        }
 
         #if DEBUG
         if let viewModel = viewModel, let tier = viewModel.debug_spawnBallTier {
@@ -2911,7 +2998,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         } else {
             dangerStartTime = nil
             if let line = dangerZone?.childNode(withName: "dangerZoneLine") as? SKShapeNode {
-                line.strokeColor = .gray
+                line.strokeColor = SKColor(white: 0.5, alpha: 0.3)
             }
         }
         
@@ -3064,7 +3151,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             
             if spheresInDangerZone.isEmpty {
                 if let line = dangerZone?.childNode(withName: "dangerZoneLine") as? SKShapeNode {
-                    line.strokeColor = .gray
+                    line.strokeColor = SKColor(white: 0.5, alpha: 0.3)
                 }
             }
         }
@@ -3362,38 +3449,42 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             return
         }
         
-        // Calculate gravity reduction based on level
-        // Level 1: 0.5x normal gravity (dy: -4.9)
-        // Level 2: 0.25x normal gravity (dy: -2.45) - 75% reduction
-        // Level 3: 0.1x normal gravity (dy: -0.98) - 90% reduction
+        // Calculate gravity reduction based on level - VERY FLOATY!
+        // Level 1: 0.12x normal gravity (dy: -1.18) - super floaty
+        // Level 2: 0.06x normal gravity (dy: -0.59) - extremely floaty
+        // Level 3: 0.02x normal gravity (dy: -0.20) - near zero-g, balls fly high!
         let baseGravity: CGFloat = -9.8
-        let baseReduction: CGFloat = 0.5 // 50% of normal gravity at level 1
+        let baseReduction: CGFloat = 0.12 // 12% of normal gravity at level 1 - very floaty!
         
-        // Use exponential scaling for stronger effect at higher levels
+        // Use exponential scaling for even more dramatic effect at higher levels
         let gravityMultiplier: CGFloat
         switch powerUp.level {
         case 1:
-            gravityMultiplier = baseReduction // 50% reduction
+            gravityMultiplier = baseReduction // 88% reduction - super floaty
         case 2:
-            gravityMultiplier = baseReduction * 0.5 // 75% reduction
+            gravityMultiplier = baseReduction * 0.5 // 94% reduction - extremely floaty
         case 3:
-            gravityMultiplier = baseReduction * 0.2 // 90% reduction
+            gravityMultiplier = baseReduction * 0.17 // 98% reduction - near zero-g!
         default:
             gravityMultiplier = baseReduction
         }
         
         let newGravity = baseGravity * gravityMultiplier
         
-        #if DEBUG
-        print("Applying Low Gravity effect:")
-        print("- Power-up level: \(powerUp.level)")
-        print("- Gravity multiplier: \(gravityMultiplier)x")
-        print("- New gravity: \(newGravity)")
-        print("- Gravity reduction: \((1 - gravityMultiplier) * 100)%")
-        #endif
+        let alreadyApplied = abs(physicsWorld.gravity.dy - newGravity) < 0.001
         
         // Apply the modified gravity
         physicsWorld.gravity = CGVector(dx: 0, dy: newGravity)
+        
+        #if DEBUG
+        if !alreadyApplied {
+            print("Applying Low Gravity effect:")
+            print("- Power-up level: \(powerUp.level)")
+            print("- Gravity multiplier: \(gravityMultiplier)x")
+            print("- New gravity: \(newGravity)")
+            print("- Gravity reduction: \((1 - gravityMultiplier) * 100)%")
+        }
+        #endif
     }
     
     private func applyRubberWorldEffect() {
@@ -3408,6 +3499,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         default: newRestitution = 0.7
         }
         
+        let alreadyApplied = abs((self.physicsBody?.restitution ?? 0) - newRestitution) < 0.001
+        
         // Update walls
         self.physicsBody?.restitution = newRestitution
         
@@ -3417,11 +3510,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         #if DEBUG
-        print("Applying Rubber World effect: Level \(powerUp.level), Restitution: \(newRestitution)")
+        if !alreadyApplied {
+            print("Applying Rubber World effect: Level \(powerUp.level), Restitution: \(newRestitution)")
+        }
         #endif
     }
     
     private func resetRubberWorldEffect() {
+        let alreadyReset = abs((self.physicsBody?.restitution ?? 0) - 0.2) < 0.001
+        
         // Reset walls to default
         self.physicsBody?.restitution = 0.2
         
@@ -3437,7 +3534,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         #if DEBUG
-        print("Resetting Rubber World effect")
+        if !alreadyReset {
+            print("Resetting Rubber World effect")
+        }
         #endif
     }
     
@@ -3445,6 +3544,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         guard let powerUp = getActiveEnvironmentalPowerUp(), powerUp.name == "Ice World" else { return }
         
         let newFriction = CGFloat(powerUp.currentStats.forceMagnitude)
+        
+        let alreadyApplied = abs((self.physicsBody?.friction ?? 0) - newFriction) < 0.001
         
         // Update walls
         self.physicsBody?.friction = newFriction
@@ -3455,11 +3556,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         #if DEBUG
-        print("Applying Ice World effect: Level \(powerUp.level), Friction: \(newFriction)")
+        if !alreadyApplied {
+            print("Applying Ice World effect: Level \(powerUp.level), Friction: \(newFriction)")
+        }
         #endif
     }
     
     private func resetIceWorldEffect() {
+        let alreadyReset = abs((self.physicsBody?.friction ?? 0) - 0.3) < 0.001
+        
         // Reset walls to default
         self.physicsBody?.friction = 0.3 // Wall friction
         
@@ -3475,7 +3580,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         #if DEBUG
-        print("Resetting Ice World effect")
+        if !alreadyReset {
+            print("Resetting Ice World effect")
+        }
         #endif
     }
     

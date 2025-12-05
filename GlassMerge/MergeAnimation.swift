@@ -13,8 +13,14 @@ extension GameScene {
         if let body = newSphere.physicsBody {
             // Random horizontal velocity (-200 to 200)
             let dx = CGFloat.random(in: -200...200)
-            // Upward velocity (300)
-            let dy: CGFloat = 300.0
+            
+            // Check if Low Gravity is active for much higher bounce
+            let isLowGravActive = viewModel?.equippedPowerUps.contains(where: { 
+                $0.name == "Low Gravity" && $0.isActive 
+            }) ?? false
+            
+            // Upward velocity - much stronger during low gravity for floaty effect!
+            let dy: CGFloat = isLowGravActive ? 800.0 : 300.0
             
             // Apply impulse scaled by mass for consistent effect
             let impulse = CGVector(dx: dx * body.mass, dy: dy * body.mass)
