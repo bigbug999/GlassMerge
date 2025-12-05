@@ -1247,8 +1247,8 @@ struct MainMenuView: View {
         .onAppear {
             hasSave = CoreDataManager.shared.hasActiveRun()
             highScore = Int(CoreDataManager.shared.getGameData().highScore)
-            // Reload powerup data from Core Data to ensure we have the latest state
-            powerUpManager.reloadFromCoreData()
+            // DON'T reload from Core Data - trust the singleton's in-memory state
+            // The PowerUpManager already has correct unlock states
         }
     }
 }
@@ -1304,10 +1304,8 @@ struct RunSetupView: View {
             .buttonStyle(.borderedProminent)
             .padding()
         }
-        .onAppear {
-            // Reload to ensure we have the latest flask unlock state
-            powerUpManager.reloadFromCoreData()
-        }
+        // DON'T reload from Core Data here - trust the singleton's in-memory state
+        // The PowerUpManager already has correct unlock states from shop interactions
     }
 }
 
@@ -2211,10 +2209,8 @@ struct UpgradeShopView: View {
                 .padding()
             }
         }
-        .onAppear {
-            // Reload data when the view appears to get the latest currency and unlocks
-            powerUpManager.reloadFromCoreData()
-        }
+        // DON'T reload from Core Data on appear - trust the singleton's in-memory state
+        // The shop modifies the singleton directly, so state is always current
     }
 }
 
@@ -3362,6 +3358,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         
         sphere.physicsBody = body
+        
+        // Apply initial downward impulse during Low Gravity to give balls a starting boost
+        if hasActivePowerUp("Low Gravity") {
+            let initialDownwardImpulse = CGVector(dx: 0, dy: -150.0 * body.mass)
+            sphere.run(SKAction.wait(forDuration: 0.05)) {
+                body.applyImpulse(initialDownwardImpulse)
+            }
+        }
         
         // Add constraint to prevent visual rotation
         let noRotationConstraint = SKConstraint.zRotation(SKRange(constantValue: 0.0))
