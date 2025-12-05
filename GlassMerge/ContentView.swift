@@ -635,34 +635,40 @@ class GameViewModel: ObservableObject {
         self.run = gameData.currentRun
         self.highScore = Int(gameData.highScore)
         
-        // CRITICAL: Reload powerup data from Core Data to ensure we have the latest unlock states
-        // This ensures that any powerups unlocked in the shop are reflected here
-        powerUpManager.reloadFromCoreData()
+        // DON'T reload from Core Data here! The PowerUpManager singleton already has
+        // the correct in-memory state (updated when user unlocked powerups in shop).
+        // Reloading here can cause stale Core Data to overwrite correct in-memory state.
         
-        // Initialize with all unlocked power-ups from the freshly reloaded manager
+        // Initialize with all unlocked power-ups from the manager's IN-MEMORY state
         self.equippedPowerUps = powerUpManager.getUnlockedPowerUps()
         
         #if DEBUG
-        print("[GameViewModel] init: Loaded \(equippedPowerUps.count) unlocked powerups")
+        let unlockedNames = equippedPowerUps.map { $0.name }
+        print("[GameViewModel] init: Loaded \(equippedPowerUps.count) unlocked powerups: \(unlockedNames)")
         #endif
         
         if let run = self.run {
             self.applyRunState(run)
         }
         
-        // After applying run state (or for new runs), refresh equippedPowerUps to ensure
-        // all unlocked powerups are included and states are properly synced
+        // After applying run state, ensure all unlocked powerups are in the equipped list
         refreshEquippedPowerUps()
         
         startPowerUpTimer()
     }
     
     private func refreshEquippedPowerUps() {
-        // Reload from Core Data to ensure we have the absolute latest unlock states
-        powerUpManager.reloadFromCoreData()
+        // DON'T reload from Core Data here - trust the singleton's in-memory state
+        // The PowerUpManager singleton is the source of truth and was updated when 
+        // powerups were unlocked in the shop. Reloading here can cause stale data issues.
         
-        // Get all currently unlocked powerups from the manager
+        // Get all currently unlocked powerups from the manager's IN-MEMORY state
         let allUnlocked = powerUpManager.getUnlockedPowerUps()
+        
+        #if DEBUG
+        print("[GameViewModel] refreshEquippedPowerUps: Manager has \(allUnlocked.count) unlocked powerups: \(allUnlocked.map { $0.name })")
+        print("[GameViewModel] refreshEquippedPowerUps: Current equippedPowerUps has \(equippedPowerUps.count): \(equippedPowerUps.map { $0.name })")
+        #endif
         
         // If no powerups are unlocked, clear equippedPowerUps and return
         guard !allUnlocked.isEmpty else {
@@ -670,32 +676,24 @@ class GameViewModel: ObservableObject {
             return
         }
         
-        // Create a map of current equipped powerups by name to preserve their state
-        // Use name as the key since UUID is generated fresh each time
+        // Create a map of current equipped powerups by name to preserve their runtime state
         var equippedMap: [String: PowerUp] = [:]
         for powerUp in equippedPowerUps {
             equippedMap[powerUp.name] = powerUp
         }
         
-        // Build new equipped list with all unlocked powerups, preserving state from equippedMap
+        // Build new equipped list with all unlocked powerups, preserving runtime state from equippedMap
         var newEquipped: [PowerUp] = []
         for unlockedPowerUp in allUnlocked {
             if let existing = equippedMap[unlockedPowerUp.name] {
-                // Preserve existing runtime state (active, primed, timers, charges) 
-                // but ALWAYS update unlock status and level from manager (progression)
+                // Preserve existing runtime state (active, primed, timers, charges)
+                // but use unlock status and level from the manager (source of truth)
                 var updated = existing
-                updated.isUnlocked = unlockedPowerUp.isUnlocked
-                // Always use the level from progression, not from saved run
-                let oldLevel = updated.level
+                updated.isUnlocked = true // Always true since it's in allUnlocked
                 updated.level = unlockedPowerUp.level
-                if oldLevel != updated.level {
-                    #if DEBUG
-                    print("[GameViewModel] refreshEquippedPowerUps: Updated \(unlockedPowerUp.name) level from \(oldLevel) to \(updated.level)")
-                    #endif
-                }
                 newEquipped.append(updated)
             } else {
-                // Newly unlocked powerup or powerup not in equipped list yet, add it
+                // Newly unlocked powerup not yet in equipped list, add it
                 #if DEBUG
                 print("[GameViewModel] refreshEquippedPowerUps: Adding newly unlocked powerup: \(unlockedPowerUp.name)")
                 #endif
@@ -705,16 +703,8 @@ class GameViewModel: ObservableObject {
         
         equippedPowerUps = newEquipped
         
-        // Safety check: if we somehow ended up with no powerups but there are unlocked ones, repopulate
-        if equippedPowerUps.isEmpty && !allUnlocked.isEmpty {
-            #if DEBUG
-            print("[GameViewModel] refreshEquippedPowerUps: WARNING - equippedPowerUps is empty but \(allUnlocked.count) powerups are unlocked! Repopulating...")
-            #endif
-            equippedPowerUps = allUnlocked
-        }
-        
         #if DEBUG
-        print("[GameViewModel] refreshEquippedPowerUps: Found \(allUnlocked.count) unlocked powerups, equippedPowerUps now has \(equippedPowerUps.count) powerups")
+        print("[GameViewModel] refreshEquippedPowerUps complete: equippedPowerUps now has \(equippedPowerUps.count) powerups")
         #endif
     }
     
@@ -1112,8 +1102,8 @@ class GameViewModel: ObservableObject {
     func reset() {
         score = 0
         
-        // Reload from Core Data to get the latest unlock states
-        powerUpManager.reloadFromCoreData()
+        // Use the manager's IN-MEMORY state - don't reload from Core Data
+        // The singleton already has correct state from shop interactions
         equippedPowerUps = powerUpManager.getUnlockedPowerUps()
         
         if let run = self.run {
@@ -1125,7 +1115,7 @@ class GameViewModel: ObservableObject {
         powerUpManager.resetOfferedPowerUps() // Reset offered power-ups when starting new game
         
         #if DEBUG
-        print("[GameViewModel] reset: Loaded \(equippedPowerUps.count) unlocked powerups")
+        print("[GameViewModel] reset: Loaded \(equippedPowerUps.count) unlocked powerups: \(equippedPowerUps.map { $0.name })")
         #endif
     }
 
