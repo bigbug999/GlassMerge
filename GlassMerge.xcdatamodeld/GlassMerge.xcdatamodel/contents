@@ -8,6 +8,7 @@
         <attribute name="isRecharging" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="level" optional="YES" attributeType="Integer 64" usesScalarValueType="YES"/>
         <attribute name="mergesUntilRecharge" optional="YES" attributeType="Integer 64" usesScalarValueType="YES"/>
+        <attribute name="remainingCooldown" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="remainingDuration" optional="YES" attributeType="Double" usesScalarValueType="YES"/>
         <attribute name="slotIndex" optional="YES" attributeType="Integer 64" usesScalarValueType="YES"/>
         <attribute name="type" optional="YES" attributeType="String"/>
