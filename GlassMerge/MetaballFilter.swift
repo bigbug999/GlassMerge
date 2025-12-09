@@ -5,7 +5,6 @@ class MetaballFilter: CIFilter {
     @objc dynamic var threshold: CGFloat = 0.5
     @objc dynamic var blurRadius: CGFloat = 10.0
     @objc dynamic var opacity: CGFloat = 0.5 // Default opacity for glass effect
-    @objc dynamic var time: CGFloat = 0.0 // Time for holographic effect animation
     
     // Use string-based initialization to ensure compatibility
     private let blurFilter = CIFilter(name: "CIGaussianBlur")!
@@ -36,10 +35,10 @@ class MetaballFilter: CIFilter {
         guard let blurredImage = blurFilter.outputImage else { return nil }
         
         // 2. Apply Threshold Kernel
-        // We need to pass the blurred image, the threshold value, the target opacity, and time
+        // We need to pass the blurred image, the threshold value, and the target opacity
         return MetaballFilter.thresholdKernel.apply(
             extent: blurredImage.extent,
-            arguments: [blurredImage, Float(threshold), Float(opacity), Float(time)]
+            arguments: [blurredImage, Float(threshold), Float(opacity)]
         )
     }
 }

@@ -2755,7 +2755,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let effectNode = SKEffectNode()
         effectNode.shouldEnableEffects = true
         let filter = MetaballFilter()
-        filter.blurRadius = 10.0
+        filter.blurRadius = 4.0 // Reduced for subtle blending
         filter.threshold = 0.5
         filter.opacity = 0.8 // Transparent glass
         effectNode.filter = filter
@@ -3115,14 +3115,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         lastUpdateTime = currentTime
         
-        // Update holographic rainbow effect time
-        if let filter = sphereEffectNode?.filter as? MetaballFilter {
-            // Use a wrapping time value to avoid precision issues over long runs
-            // Slowing down the effect by factor of 10 (dividing time by 10.0)
-            let timeLoop = CGFloat((currentTime * 0.1).truncatingRemainder(dividingBy: 10000.0))
-            filter.time = timeLoop
-        }
-
         #if DEBUG
         if let viewModel = viewModel, let tier = viewModel.debug_spawnBallTier {
             let centerPosition = CGPoint(x: frame.midX, y: frame.midY)
